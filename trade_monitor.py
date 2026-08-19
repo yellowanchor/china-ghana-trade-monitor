@@ -107,17 +107,28 @@ CALC_DEFAULTS = {
 # ---------------------------- AI 智能分析配置 ----------------------------------
 # 配置文件 ai_config.json（与脚本同目录，首次运行自动生成模板）。
 # 兼容所有 OpenAI 风格 /chat/completions 接口：
+#   智谱 GLM  : base_url=https://open.bigmodel.cn/api/paas/v4   model=glm-4.7-flash（永久免费）
 #   DeepSeek  : base_url=https://api.deepseek.com/v1      model=deepseek-chat
 #   通义千问   : base_url=https://dashscope.aliyuncs.com/compatible-mode/v1  model=qwen-plus
-#   智谱 GLM  : base_url=https://open.bigmodel.cn/api/paas/v4   model=glm-4-flash
+# 支持多通道自动容灾：主通道失败（超时/限流/网络错误）时，按 fallbacks 列表顺序
+# 依次切换备用通道，全部失败才降级规则引擎。
 # api_key 留空时，AI 功能自动降级为内置规则引擎（无需任何费用即可使用）。
 AI_CONFIG_FILE = "ai_config.json"
 AI_CONFIG_TEMPLATE = {
-    "base_url": "https://api.deepseek.com/v1",
+    "base_url": "https://open.bigmodel.cn/api/paas/v4",
     "api_key": "",          # ← 填入你的 API Key 后即启用真正的大模型分析
-    "model": "deepseek-chat",
+    "model": "glm-4.7-flash",
     "timeout": 60,
+    # 备用通道（可选）：主通道失败时按顺序自动切换
+    "fallbacks": [
+        {"base_url": "https://api.deepseek.com/v1",
+         "api_key": "",     # ← 填入备用 Key 后启用
+         "model": "deepseek-chat"},
+    ],
 }
+
+# 最近一次成功调用实际使用的模型名（多通道容灾后用于日报署名）
+AI_LAST_ENGINE = None
 
 
 def load_ai_config():
@@ -659,26 +670,79 @@ RULE_SUGGESTIONS = [
 ]
 
 
+def _ai_providers():
+    """按优先级返回可用的 AI 通道列表：主通道 + fallbacks（跳过未填 Key 的）。"""
+    cfg = load_ai_config()
+    providers = []
+    if str(cfg.get("api_key", "")).strip():
+        providers.append(cfg)
+    for fb in cfg.get("fallbacks") or []:
+        if isinstance(fb, dict) and str(fb.get("api_key", "")).strip():
+            merged = dict(cfg)          # 继承 timeout 等公共字段
+            merged.update(fb)
+            providers.append(merged)
+    return providers
+
+
 def ai_chat(messages):
     """
-    调用 OpenAI 兼容的 /chat/completions 接口。
+    调用 OpenAI 兼容的 /chat/completions 接口（多通道自动容灾）。
     messages: [{"role": "system"/"user"/"assistant", "content": "..."}, ...]
-    返回模型回复文本；失败抛异常。
+    - 主通道失败（超时/网络错误）时按 fallbacks 顺序切换备用通道；
+    - 遇限流/过载（HTTP 429/5xx、智谱 1302/1305）在通道内退避重试 2 次；
+    - 支持 provider 配置 extra_body（如智谱 {"thinking":{"type":"disabled"}}）；
+    - 智谱思考模式吞掉正文时回退取 reasoning_content。
+    成功后把实际使用的模型名记入全局 AI_LAST_ENGINE，供日报署名。
+    返回模型回复文本；全部通道失败时抛出最后一次的异常。
     """
-    cfg = load_ai_config()
-    url = cfg["base_url"].rstrip("/") + "/chat/completions"
-    payload = json.dumps({"model": cfg["model"], "messages": messages,
-                          "temperature": 0.3}).encode("utf-8")
-    req = urllib.request.Request(url, data=payload, headers={
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {cfg['api_key']}",
-    })
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE   # 兼容部分国内网关证书
-    with urllib.request.urlopen(req, timeout=cfg.get("timeout", 60), context=ctx) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
-    return data["choices"][0]["message"]["content"].strip()
+    global AI_LAST_ENGINE
+    providers = _ai_providers()
+    if not providers:
+        raise RuntimeError("未配置任何可用的 AI API Key")
+    last_err = None
+    for pv in providers:
+        url = pv["base_url"].rstrip("/") + "/chat/completions"
+        body = {"model": pv["model"], "messages": messages, "temperature": 0.3}
+        body.update(pv.get("extra_body") or {})     # 通道私有参数
+        payload = json.dumps(body).encode("utf-8")
+        req = urllib.request.Request(url, data=payload, headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {pv['api_key']}",
+        })
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE   # 兼容部分国内网关证书
+        for attempt in range(3):          # 单通道内限流退避重试
+            try:
+                with urllib.request.urlopen(req, timeout=pv.get("timeout", 60),
+                                            context=ctx) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+            except urllib.error.HTTPError as e:
+                last_err = e
+                if attempt < 2 and e.code in (429, 500, 502, 503):
+                    time.sleep(8 * (attempt + 1))    # 8s、16s 退避
+                    continue
+                break                               # 不可重试错误 → 换通道
+            except Exception as e:
+                last_err = e
+                break
+            err = data.get("error")
+            if err:                                 # 200 但返回错误体（智谱常见）
+                last_err = RuntimeError(f'{err.get("code")}: {err.get("message")}')
+                if attempt < 2 and str(err.get("code", "")) in ("1302", "1305", "1113"):
+                    time.sleep(8 * (attempt + 1))    # 限流/过载 → 退避重试
+                    continue
+                break
+            msg = data["choices"][0]["message"] or {}
+            content = str(msg.get("content") or "").strip()
+            if not content:                          # 思考模式可能吞掉正文
+                content = str(msg.get("reasoning_content") or "").strip()
+            if not content:
+                last_err = RuntimeError("模型返回空内容")
+                break
+            AI_LAST_ENGINE = pv["model"]
+            return content
+    raise last_err
 
 
 def build_daily_context():
@@ -725,7 +789,7 @@ def generate_ai_report():
                 {"role": "system", "content": BUSINESS_BRIEF},
                 {"role": "user", "content": prompt},
             ])
-            engine = load_ai_config()["model"]
+            engine = AI_LAST_ENGINE or load_ai_config()["model"]
         except Exception as e:
             content = rule_report(ctx) + f"\n\n> ⚠️ 大模型调用失败（{str(e)[:80]}），已降级为规则引擎。"
             engine = "rule(降级)"
