@@ -1,0 +1,19 @@
+# 数据与运行时产物（不入库）
+*.db
+*.sqlite3
+*.log
+__pycache__/
+*.pyc
+
+# AI 模型文件（CLIP ONNX，体积大，见 README 下载说明）
+models/
+
+# 密钥配置（用 ai_config.example.json 作模板）
+ai_config.json
+
+# 测试与调试脚本 / 抓取样本
+_test_*.py
+_save_samples.py
+_vision_samples/
+b2b_sample.html
+page.html

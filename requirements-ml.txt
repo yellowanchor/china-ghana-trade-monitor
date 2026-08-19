@@ -1,0 +1,6 @@
+# 可选：配件图像 AI 验证模块（parts_vision.py）依赖
+# 不安装也能运行主程序，配件过滤自动降级为纯规则模式
+onnxruntime>=1.17
+numpy>=1.26
+pillow>=10.0
+tokenizers>=0.15
