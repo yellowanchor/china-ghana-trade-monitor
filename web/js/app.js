@@ -1378,6 +1378,7 @@
       return {
         activeView: 'overview',
         theme: themeStore,
+        me: null,
         summary: { latest_rate: null, rates: [], ghs_change_pct: null, policies: [], fetch_log: [],
                    calc_defaults: {}, calc_default_item: {}, categories: [], ai_enabled: false, last_report: null },
         loading: true,
@@ -1406,6 +1407,14 @@
       rateTip() { return '最新汇率：USD/CNY 美元兑人民币 ｜ USD/GHS 美元兑加纳塞地'; },
     },
     methods: {
+      async loadMe() {
+        try {
+          this.me = await api('/api/auth/me');
+        } catch (e) {
+          // 未登录 → 跳转到登录页
+          window.location.href = '/login.html';
+        }
+      },
       async loadSummary() {
         this.loading = true;
         try {
@@ -1417,9 +1426,19 @@
         } finally { this.loading = false; }
       },
       onSelect(index) { this.activeView = index; },
+      goLogin() { window.location.href = '/login.html'; },
+      onUserCommand(cmd) {
+        if (cmd === 'logout') {
+          api('/api/auth/logout').finally(() => { window.location.href = '/login.html'; });
+        } else if (cmd === 'settings') {
+          ElMessage.info('账号设置（修改邮箱/手机号/密码/实名）即将上线');
+        } else if (cmd === 'realname') {
+          ElMessage.info('实名认证（预留支付宝实名 API）即将上线');
+        }
+      },
       cycleTheme,
     },
-    mounted() { this.loadSummary(); },
+    mounted() { this.loadMe(); this.loadSummary(); },
     template: `
     <el-container class="app-shell">
       <el-header class="topbar" height="52px">
@@ -1429,11 +1448,24 @@
         </div>
         <div class="top-right">
           <span class="rate-status" :title="rateTip">{{ rateText }}</span>
-          <span class="nav-icon" title="用户中心（预留功能位）"><span class="iconfont icon-person-circle"></span></span>
+          <el-dropdown v-if="me" trigger="click" @command="onUserCommand">
+            <span class="nav-user">
+              <span class="nav-avatar"><span class="iconfont icon-person-circle"></span></span>
+              <span class="nav-uname">{{ me.username }}</span>
+              <span class="iconfont icon-caret-down" style="font-size:11px;opacity:.6"></span>
+            </span>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="settings"><span class="iconfont icon-gear" style="margin-right:6px"></span>账号设置</el-dropdown-item>
+                <el-dropdown-item command="realname"><span class="iconfont icon-shield-check" style="margin-right:6px"></span>实名认证</el-dropdown-item>
+                <el-dropdown-item command="logout" divided><span class="iconfont icon-box-arrow-right" style="margin-right:6px"></span>退出登录</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+          <span v-else class="nav-icon" title="登录" @click="goLogin"><span class="iconfont icon-person-circle"></span></span>
           <span class="nav-icon theme-toggle" :title="themeTitle" @click="cycleTheme">
             <span class="iconfont" :class="themeIcon"></span>
           </span>
-          <span class="nav-icon" title="消息通知（预留功能位）"><span class="iconfont icon-bell"></span></span>
         </div>
       </el-header>
       <el-container class="body">

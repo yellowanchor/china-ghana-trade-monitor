@@ -39,6 +39,8 @@ import io
 import json
 import os
 import re
+import secrets
+import base64
 import ssl
 import sqlite3
 import sys
@@ -219,6 +221,38 @@ AI_CONFIG_TEMPLATE = {
         "app_secret": "",
         "access_token": "",   # OAuth2.0 令牌（部分接口需要；搜索接口可留空）
     },
+    # ===== 鉴权相关（登录/注册/验证码/实名）=====
+    # 服务端加密密钥：首次启动随机生成并落盘于此（ai_config.json 已 gitignore，不会入库）。
+    # 用于密码两级可逆加密。请勿手动清空，否则已注册账号将无法解密登录。
+    "app_secret": "",
+    # 邮箱验证码 API（注册/找回密码）—— 免费额度参考：
+    #   Resend      3,000 封/月（无需信用卡）  https://resend.com
+    #   Brevo       300 封/天                   https://brevo.com
+    #   SendGrid    100 封/天（试用）           https://sendgrid.com
+    #   阿里云邮件推送  200 封/天（新用户）      https://dm.aliyun.com
+    "email_api": {
+        "provider": "resend",     # resend | smtp | ""
+        "from": "onboarding@resend.dev",
+        "resend_key": "",         # Resend API Key（免费档直接填这里即可真实发送）
+        # 或用自有 SMTP：
+        "smtp_host": "", "smtp_port": 587, "smtp_user": "", "smtp_pass": "", "smtp_tls": True,
+    },
+    # 短信验证码 API（注册/找回密码）—— 免费额度参考（国内均需企业/实名）：
+    #   阿里云短信   试用 100 条/月（需企业实名）   https://dysms.console.aliyun.com
+    #   腾讯云短信   试用 100 条/月（需企业实名）   https://cloud.tencent.com/product/sms
+    #   容联云通讯   试用额度（注册即送）            https://www.yuntongxun.com
+    #   聚合数据     按量付费，小额试用            https://www.juhe.cn
+    "sms_api": {
+        "provider": "",          # aliyun | tencent | ""（留空走 dev 回显模式）
+        "key": "", "secret": "", "sign": "", "template_id": "",
+        "endpoint": "",
+    },
+    # 支付宝实名认证 API（预留）—— 资金类实名核验，需企业商户号
+    #   文档：https://opendocs.alipay.com/open/201810121004217337
+    "alipay_realname": {
+        "app_id": "", "private_key": "", "public_key": "",
+        "endpoint": "https://openapi.alipay.com/gateway.do",
+    },
 }
 
 # 最近一次成功调用实际使用的模型名（多通道容灾后用于日报署名）
@@ -243,6 +277,197 @@ def load_ai_config():
 def ai_enabled():
     """判断是否已配置可用的 API Key。"""
     return bool(load_ai_config().get("api_key", "").strip())
+
+
+# ==============================================================================
+# 一.x 认证、会话与密码可逆加密（两级）
+# ------------------------------------------------------------------------------
+# 设计取舍：用户要求「密码至少两级加密，且能解密，方便修改/找回密码」。
+# 因此此处采用【可逆】加密而非单向哈希：
+#   明文 → XOR(PBKDF2(secret, salt1)) → XOR(PBKDF2(secret, salt2)) → base64
+#   salt 随机且随密文存储，解密路径完全可逆。
+# 【安全提示】XOR 流密码强度弱于 AES；正式生产建议：
+#   1) 用 cryptography 的 Fernet（AES-256+HMAC）作为第一级，本 XOR 作为第二级；
+#   2) 同时另存一份 bcrypt/argon2 单向哈希专用于登录校验。
+# 当前实现零第三方依赖（纯标准库），且可逆，满足需求；secret 存于 gitignore 的
+# ai_config.json，首次运行自动生成。
+# ==============================================================================
+
+SESSION_TTL_DAYS = 7
+_CODE_TTL_MIN = 5
+
+
+def _app_secret():
+    """服务端密钥：取 ai_config['app_secret']，缺失则随机生成并落盘。"""
+    cfg = load_ai_config()
+    s = (cfg.get("app_secret") or "").strip()
+    if len(s) >= 16:
+        return s
+    s = secrets.token_hex(32)
+    try:
+        cfg["app_secret"] = s
+        with open(AI_CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+    return s
+
+
+def _derive_key(secret, salt, length):
+    return hashlib.pbkdf2_hmac("sha256", secret.encode("utf-8"), salt, 100_000, dklen=length)
+
+
+def _xor(data, key):
+    return bytes(b ^ key[i % len(key)] for i, b in enumerate(data))
+
+
+def pw_encrypt(plain):
+    """两级可逆加密：返回 base64（salt1[16] + salt2[16] + 密文）。"""
+    secret = _app_secret()
+    pt = (plain or "").encode("utf-8")
+    salt1 = secrets.token_bytes(16)
+    salt2 = secrets.token_bytes(16)
+    k1 = _derive_key(secret, salt1, max(32, len(pt)))
+    l1 = _xor(pt, k1)
+    k2 = _derive_key(secret, salt2, max(32, len(l1)))
+    l2 = _xor(l1, k2)
+    return base64.b64encode(salt1 + salt2 + l2).decode("ascii")
+
+
+def pw_decrypt(blob):
+    """解密（可逆）；失败返回 None。"""
+    try:
+        raw = base64.b64decode(blob)
+    except Exception:
+        return None
+    if len(raw) < 33:
+        return None
+    salt1, salt2, l2 = raw[:16], raw[16:32], raw[32:]
+    k2 = _derive_key(_app_secret(), salt2, max(32, len(l2)))
+    l1 = _xor(l2, k2)
+    k1 = _derive_key(_app_secret(), salt1, max(32, len(l1)))
+    try:
+        return _xor(l1, k1).decode("utf-8")
+    except Exception:
+        return None
+
+
+def pw_check(blob, plain):
+    return pw_decrypt(blob) == plain
+
+
+# ---------------- 验证码（邮箱 / 短信）预留接口 ----------------
+def _gen_code():
+    return "%06d" % secrets.randbelow(1000000)
+
+
+def _store_code(key, code, purpose):
+    conn = get_db()
+    now = datetime.now()
+    exp = now + timedelta(minutes=_CODE_TTL_MIN)
+    conn.execute("DELETE FROM verify_codes WHERE key=? AND purpose=?", (key, purpose))
+    conn.execute(
+        "INSERT INTO verify_codes(key,code,purpose,created_at,expires_at) VALUES(?,?,?,?,?)",
+        (key, code, purpose, now.strftime("%Y-%m-%d %H:%M:%S"),
+         exp.strftime("%Y-%m-%d %H:%M:%S")))
+    conn.commit()
+    conn.close()
+
+
+def _verify_code(key, code, purpose):
+    conn = get_db()
+    row = conn.execute(
+        "SELECT code,expires_at FROM verify_codes WHERE key=? AND purpose=? "
+        "ORDER BY id DESC LIMIT 1", (key, purpose)).fetchone()
+    conn.close()
+    if not row:
+        return False
+    if datetime.strptime(row["expires_at"], "%Y-%m-%d %H:%M:%S") < datetime.now():
+        return False
+    return row["code"] == code
+
+
+def _send_code_email(target, code):
+    """发送验证码邮件。已配置 resend_key / SMTP 则真实发送；否则 dev 模式（返回 False → 调用方回显 code）。"""
+    cfg = load_ai_config().get("email_api") or {}
+    if cfg.get("resend_key"):
+        try:
+            req = urllib.request.Request(
+                "https://api.resend.com/emails",
+                data=json.dumps({
+                    "from": cfg.get("from", "onboarding@resend.dev"),
+                    "to": [target],
+                    "subject": "验证码",
+                    "text": "您的验证码为 %s，%d 分钟内有效。" % (code, _CODE_TTL_MIN),
+                }).encode("utf-8"),
+                headers={"Authorization": "Bearer " + cfg["resend_key"],
+                         "Content-Type": "application/json"},
+                method="POST")
+            urllib.request.urlopen(req, timeout=10).read()
+            return True
+        except Exception:
+            pass
+    if cfg.get("smtp_host") and cfg.get("smtp_user"):
+        try:
+            import smtplib
+            body = ("Subject: 验证码\r\n\r\n您的验证码为 %s，%d 分钟内有效。"
+                    % (code, _CODE_TTL_MIN)).encode("utf-8")
+            with smtplib.SMTP(cfg["smtp_host"], int(cfg.get("smtp_port", 587))) as s:
+                if cfg.get("smtp_tls", True):
+                    s.starttls()
+                s.login(cfg["smtp_user"], cfg["smtp_pass"])
+                s.sendmail(cfg.get("from", cfg["smtp_user"]), [target], body)
+            return True
+        except Exception:
+            pass
+    return False  # dev 模式
+
+
+def _send_code_sms(target, code):
+    """发送验证码短信（预留阿里云/腾讯云等）。未配置 provider 时返回 False → dev 回显。"""
+    cfg = load_ai_config().get("sms_api") or {}
+    if cfg.get("provider") and cfg.get("key"):
+        # TODO: 按所选 provider 调用其短信网关（拼签名 + 模板 + 参数）。
+        # 阿里云示例：用 SMS 请求签名 + SendSms API，TemplateParam={"code":"123456"}
+        pass
+    return False  # dev 模式
+
+
+# ---------------- 会话（Cookie） ----------------
+def _create_session(user_id):
+    token = secrets.token_hex(32)
+    now = datetime.now()
+    exp = now + timedelta(days=SESSION_TTL_DAYS)
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO sessions(token,user_id,created_at,expires_at) VALUES(?,?,?,?)",
+        (token, user_id, now.strftime("%Y-%m-%d %H:%M:%S"),
+         exp.strftime("%Y-%m-%d %H:%M:%S")))
+    conn.commit()
+    conn.close()
+    return token
+
+
+def _session_user(token):
+    if not token:
+        return None
+    conn = get_db()
+    row = conn.execute(
+        "SELECT s.expires_at, u.* FROM sessions s JOIN users u ON u.id=s.user_id "
+        "WHERE s.token=?", (token,)).fetchone()
+    conn.close()
+    if not row:
+        return None
+    if datetime.strptime(row["expires_at"], "%Y-%m-%d %H:%M:%S") < datetime.now():
+        return None
+    return dict(row)
+
+
+def _user_public(u):
+    """对外只暴露非敏感字段。"""
+    return {"id": u["id"], "account": u["account"], "username": u.get("username") or u["account"],
+            "email": u.get("email") or "", "phone": u.get("phone") or "",
+            "realname_status": u.get("realname_status", 0)}
 
 
 # ==============================================================================
@@ -368,6 +593,37 @@ def get_db():
             risk_score  INTEGER,                     -- 风险扣分（越高越危险）
             created_at  TEXT
         );
+
+        -- ===== 鉴权：用户 / 会话 / 验证码 =====
+        CREATE TABLE IF NOT EXISTS users (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            account          TEXT UNIQUE,             -- 登录账号（唯一，4-20位）
+            username         TEXT,                    -- 用户名/昵称
+            email            TEXT,                    -- 邮箱（预留邮箱验证码）
+            phone            TEXT,                    -- 手机号（预留短信验证码）
+            pw_blob          TEXT,                    -- 密码两级可逆加密密文
+            realname         TEXT,                    -- 实名姓名（预留支付宝实名）
+            idno             TEXT,                    -- 证件号（预留，建议另加密）
+            realname_status  INTEGER DEFAULT 0,       -- 0未认证 1已认证 2审核中
+            created_at       TEXT,
+            updated_at       TEXT
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_user_account ON users(account);
+        CREATE TABLE IF NOT EXISTS sessions (
+            token       TEXT PRIMARY KEY,
+            user_id     INTEGER,
+            created_at  TEXT,
+            expires_at  TEXT
+        );
+        CREATE TABLE IF NOT EXISTS verify_codes (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            key         TEXT,                         -- email 或 phone
+            code        TEXT,
+            purpose     TEXT,                         -- register | reset
+            created_at  TEXT,
+            expires_at  TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_vc_key ON verify_codes(key, purpose);
     """)
     # 字段迁移：商品展示图、AI 图像校验结果（兼容旧库）
     for col_sql in (
@@ -2785,6 +3041,22 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path.split("?", 1)[0]
+        # ---- 访问门禁 ----
+        # 1) 认证 API 永远公开
+        if path.startswith("/api/auth/"):
+            return self._auth_get(path)
+        # 2) 登录页公开
+        if path == "/login.html":
+            return self._serve_static("login.html")
+        # 3) 其余 API 必须登录（未登录返回 401，前端据此跳登录页）
+        if path.startswith("/api/"):
+            if not self.current_user():
+                return self._send(401, {"error": "unauthorized", "login": True})
+        # 4) 首页 / 其它 HTML 入口未登录 → 跳登录页
+        if path in ("/", "/index.html") or path.endswith(".html"):
+            if not self.current_user():
+                return self.redirect("/login.html")
+        # 5) 认证通过（或公开静态资源）继续原有路由
         if path == "/" or path.startswith("/index"):
             self._serve_static("index.html")   # Vue3 应用入口（web/index.html）
         elif self.path.startswith("/echarts.min.js"):
@@ -2908,6 +3180,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._serve_static(path)
 
     def do_POST(self):
+        # ---- 访问门禁 ----
+        if self.path.startswith("/api/auth/"):
+            return self._auth_post(self.path)
+        if not self.current_user():
+            return self._send(401, {"error": "unauthorized", "login": True})
         if self.path == "/api/fetch":
             rate_ok, _ = fetch_rates()
             results = fetch_policies()
@@ -3047,6 +3324,126 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return json.loads(raw.decode("utf-8"))
         except Exception:
             return {}
+
+    # ---------------- 鉴权辅助 ----------------
+    def current_user(self):
+        """从 Cookie 解析会话，返回用户字典或 None。"""
+        cookie = self.headers.get("Cookie") or ""
+        m = re.search(r"tm_sid=([0-9a-f]+)", cookie)
+        return _session_user(m.group(1) if m else None)
+
+    def redirect(self, loc):
+        self.send_response(302)
+        self.send_header("Location", loc)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _cookie_header(self, token, max_age=SESSION_TTL_DAYS * 86400):
+        return "tm_sid=%s; Path=/; Max-Age=%d; HttpOnly; SameSite=Lax" % (token, max_age)
+
+    def _auth_get(self, path):
+        if path == "/api/auth/me":
+            u = self.current_user()
+            if not u:
+                return self._send(401, {"error": "unauthorized", "login": True})
+            return self._send(200, _user_public(u))
+        return self._send(404, {"error": "not found"})
+
+    def _auth_post(self, path):
+        body = self._read_json()
+        if path == "/api/auth/register":
+            return self._auth_register(body)
+        if path == "/api/auth/login":
+            return self._auth_login(body)
+        if path == "/api/auth/logout":
+            cookie = self.headers.get("Cookie") or ""
+            m = re.search(r"tm_sid=([0-9a-f]+)", cookie)
+            if m:
+                conn = get_db()
+                conn.execute("DELETE FROM sessions WHERE token=?", (m.group(1),))
+                conn.commit()
+                conn.close()
+            self._send(200, {"ok": True},
+                       headers={"Set-Cookie": self._cookie_header("", 0)})
+            return
+        if path == "/api/auth/send-code":
+            return self._auth_send_code(body)
+        return self._send(404, {"error": "not found"})
+
+    def _auth_send_code(self, body):
+        channel = (body.get("channel") or "email").strip().lower()
+        target = (body.get("target") or "").strip()
+        purpose = (body.get("purpose") or "register").strip()
+        if channel not in ("email", "sms"):
+            return self._send(400, {"error": "channel 必须是 email 或 sms"})
+        if channel == "email" and not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", target):
+            return self._send(400, {"error": "邮箱格式不正确"})
+        if channel == "sms" and not re.match(r"^1\d{10}$", target):
+            return self._send(400, {"error": "手机号格式不正确"})
+        code = _gen_code()
+        _store_code(target, code, purpose)
+        ok = _send_code_email(target, code) if channel == "email" else _send_code_sms(target, code)
+        # ok=False 表示未配置真实通道 → dev 回显模式，把 code 返回给前端便于联调（生产请删除）
+        resp = {"ok": True, "dev": not ok, "channel": channel}
+        if not ok:
+            resp["code"] = code
+        return self._send(200, resp)
+
+    def _auth_register(self, body):
+        account = (body.get("account") or "").strip()
+        username = (body.get("username") or "").strip()
+        email = (body.get("email") or "").strip()
+        phone = (body.get("phone") or "").strip()
+        password = body.get("password") or ""
+        code = (body.get("code") or "").strip()
+        if not re.match(r"^[A-Za-z0-9_]{4,20}$", account):
+            return self._send(400, {"error": "账号需为 4-20 位字母/数字/下划线"})
+        if not username:
+            return self._send(400, {"error": "用户名不能为空"})
+        if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+            return self._send(400, {"error": "邮箱格式不正确"})
+        if not re.match(r"^1\d{10}$", phone):
+            return self._send(400, {"error": "手机号格式不正确"})
+        # 密码复杂度：≥8 位，且同时含字母与数字（密码「至少两级」复杂度要求）
+        if len(password) < 8 or not re.search(r"[A-Za-z]", password) or not re.search(r"\d", password):
+            return self._send(400, {"error": "密码至少 8 位，且同时包含字母和数字"})
+        if not _verify_code(email, code, "register") and not _verify_code(phone, code, "register"):
+            return self._send(400, {"error": "验证码错误或已过期"})
+        conn = get_db()
+        if conn.execute("SELECT 1 FROM users WHERE account=?", (account,)).fetchone():
+            conn.close()
+            return self._send(409, {"error": "该账号已被注册"})
+        if conn.execute("SELECT 1 FROM users WHERE email=?", (email,)).fetchone():
+            conn.close()
+            return self._send(409, {"error": "该邮箱已被注册"})
+        if conn.execute("SELECT 1 FROM users WHERE phone=?", (phone,)).fetchone():
+            conn.close()
+            return self._send(409, {"error": "该手机号已被注册"})
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cur = conn.execute(
+            "INSERT INTO users(account,username,email,phone,pw_blob,created_at,updated_at) "
+            "VALUES(?,?,?,?,?,?,?)",
+            (account, username, email, phone, pw_encrypt(password), now, now))
+        uid = cur.lastrowid
+        conn.commit()
+        conn.close()
+        token = _create_session(uid)
+        self._send(200, {"ok": True, "user": _user_public({
+            "id": uid, "account": account, "username": username, "email": email,
+            "phone": phone, "realname_status": 0})},
+            headers={"Set-Cookie": self._cookie_header(token)})
+
+    def _auth_login(self, body):
+        account = (body.get("account") or "").strip()
+        password = body.get("password") or ""
+        conn = get_db()
+        u = conn.execute("SELECT * FROM users WHERE account=?", (account,)).fetchone()
+        conn.close()
+        if not u or not pw_check(u["pw_blob"], password):
+            return self._send(401, {"error": "账号或密码错误"})
+        token = _create_session(u["id"])
+        self._send(200, {"ok": True, "user": _user_public(dict(u))},
+                   headers={"Set-Cookie": self._cookie_header(token)})
 
 
 def build_summary():

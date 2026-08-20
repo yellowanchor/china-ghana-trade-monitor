@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7ec8ff"/>
+      <stop offset="0.45" stop-color="#bfe3ff"/>
+      <stop offset="1" stop-color="#eaf6ff"/>
+    </linearGradient>
+    <linearGradient id="sea" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2a8fbf"/>
+      <stop offset="1" stop-color="#0e5e8a"/>
+    </linearGradient>
+    <linearGradient id="m1" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3a7d5d"/>
+      <stop offset="1" stop-color="#245a40"/>
+    </linearGradient>
+    <linearGradient id="m2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5fa06b"/>
+      <stop offset="1" stop-color="#3c7a4c"/>
+    </linearGradient>
+    <radialGradient id="sun" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ffd23f"/>
+      <stop offset="0.6" stop-color="#ff8a3d"/>
+      <stop offset="1" stop-color="#ff8a3d" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="tint" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0b1f3a" stop-opacity="0.15"/>
+      <stop offset="1" stop-color="#0b1f3a" stop-opacity="0.35"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#sky)"/>
+  <circle cx="1180" cy="250" r="240" fill="url(#sun)"/>
+  <circle cx="1180" cy="250" r="120" fill="#ffd23f"/>
+
+  <!-- 远山 -->
+  <path d="M0 470 L260 330 L470 430 L720 300 L980 430 L1240 320 L1600 450 L1600 600 L0 600 Z" fill="url(#m2)" opacity="0.85"/>
+  <!-- 近山 -->
+  <path d="M0 560 L240 430 L520 540 L820 400 L1120 540 L1420 430 L1600 520 L1600 900 L0 900 Z" fill="url(#m1)"/>
+  <!-- 海面 -->
+  <rect y="600" width="1600" height="300" fill="url(#sea)"/>
+  <g stroke="#ffffff" stroke-opacity="0.18" stroke-width="2">
+    <line x1="0" y1="660" x2="1600" y2="660"/>
+    <line x1="0" y1="720" x2="1600" y2="720"/>
+    <line x1="0" y1="790" x2="1600" y2="790"/>
+  </g>
+  <!-- 货轮剪影（贸易主题） -->
+  <g fill="#0b2b3f" opacity="0.7" transform="translate(360 612)">
+    <rect x="0" y="20" width="150" height="34" rx="4"/>
+    <rect x="20" y="2" width="40" height="20"/>
+    <rect x="72" y="2" width="40" height="20"/>
+    <rect x="114" y="2" width="28" height="20"/>
+  </g>
+  <rect width="1600" height="900" fill="url(#tint)"/>
+</svg>

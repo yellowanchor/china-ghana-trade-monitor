@@ -134,6 +134,27 @@ html, body {
   gap: 8px;
   min-width: 0;
 }
+.topbar .nav-user {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 4px 6px;
+  border-radius: 22px;
+  cursor: pointer;
+  color: var(--text-2);
+  max-width: 200px;
+  transition: background 0.2s, color 0.2s;
+}
+.topbar .nav-user:hover { background: var(--accent-soft); color: var(--accent); }
+.topbar .nav-avatar {
+  width: 26px; height: 26px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--accent); color: #fff; font-size: 14px;
+}
+.topbar .nav-uname {
+  font-size: 13px; font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 130px;
+}
 .topbar .rate-status {
   color: var(--text-3);
   font-size: 12.5px;
