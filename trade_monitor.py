@@ -35,6 +35,7 @@
 
 import gzip
 import hashlib
+import io
 import json
 import os
 import re
@@ -1356,25 +1357,24 @@ def ask_ai(question):
 # 六·C、合同审核模块（AI 审合同，默认优先 DeepSeek）
 # ==============================================================================
 
-CONTRACT_TEMPLATE = """SALES CONTRACT
-销售合同
+CONTRACT_TEMPLATE_EN = """SALES CONTRACT
 
-Contract No.: _____________        Date: _____________
+Contract No.: _____________            Date: _____________
 
 THIS CONTRACT is made and entered into by and between:
 
-SELLER (卖方): _________________________
+SELLER: _________________________________
 Address: ____________________________________
 Tel: _____________  Email: _____________
 
-BUYER (买方): _________________________
+BUYER: _________________________________
 Address: ____________________________________
 Tel: _____________  Email: _____________
 
 The Seller agrees to sell and the Buyer agrees to purchase the following goods
 on the terms and conditions set forth below:
 
-ARTICLE 1 - COMMODITY & SPECIFICATION (商品规格)
+ARTICLE 1 - COMMODITY & SPECIFICATION
 +---+-------------------+-------+----------+----------+----------+
 | # | Description       | HS    | Qty      | Unit Price| Amount   |
 |   |                   | Code  | (pcs)    | (USD)     | (USD)    |
@@ -1384,27 +1384,27 @@ ARTICLE 1 - COMMODITY & SPECIFICATION (商品规格)
 |   | Total:            |       |          |           | _______  |
 +---+-------------------+-------+----------+----------+----------+
 
-ARTICLE 2 - COUNTRY OF ORIGIN & QUALITY (原产地及质量)
-Country of Origin: People's Republic of China (中国)
+ARTICLE 2 - COUNTRY OF ORIGIN & QUALITY
+Country of Origin: People's Republic of China.
 Quality: as per Seller's specifications and samples approved by Buyer.
 
-ARTICLE 3 - TOTAL VALUE (合同总金额)
+ARTICLE 3 - TOTAL VALUE
 Total Contract Value: USD ____________ (Say U.S. Dollars ______________ only)
 * All prices are in USD. This is a firm commitment, not subject to FX revaluation.
 
-ARTICLE 4 - TRADE TERMS (贸易术语)
+ARTICLE 4 - TRADE TERMS
 [ ] FOB Chongqing / Shenzhen, China (Incoterms 2020)
 [ ] CIF Tema Port, Ghana (Incoterms 2020)
 
-ARTICLE 5 - PACKING & SHIPPING MARKS (包装及唛头)
+ARTICLE 5 - PACKING & SHIPPING MARKS
 Packing: export-standard cartons, suitable for long-distance sea transport.
 Shipping Marks: as directed by Buyer, marked on each carton.
 
-ARTICLE 6 - PORT OF LOADING & DISCHARGE (装卸港)
+ARTICLE 6 - PORT OF LOADING & DISCHARGE
 Port of Loading: Chongqing / Shenzhen, China
 Port of Discharge: Tema Port, Ghana
 
-ARTICLE 7 - PAYMENT TERMS (付款条件) *** CRITICAL ***
+ARTICLE 7 - PAYMENT TERMS *** CRITICAL ***
 Payment shall be made by Telegraphic Transfer (T/T) as follows:
   1) 30% of total contract value as advance payment (deposit)
      within ___ working days after contract signing;
@@ -1413,7 +1413,7 @@ Payment shall be made by Telegraphic Transfer (T/T) as follows:
      until 100% payment is received.
 * No cargo release without full payment. B/L = title of goods.
 
-ARTICLE 8 - COMPLIANCE & CERTIFICATION (合规与认证)
+ARTICLE 8 - COMPLIANCE & CERTIFICATION
 The Seller shall provide:
   [ ] Certificate of Conformity (CoC) for Ghana Customs clearance;
   [ ] Commercial Invoice (3 originals);
@@ -1422,39 +1422,136 @@ The Seller shall provide:
   [ ] Certificate of Origin (CO).
 CoC cost is borne by: [ ] Seller  [ ] Buyer
 
-ARTICLE 9 - DELIVERY SCHEDULE (交货期)
+ARTICLE 9 - DELIVERY SCHEDULE
 Shipment within ___ working days after receipt of advance payment.
 Transit time (China to Tema): approximately 35-45 days by sea.
 
-ARTICLE 10 - INSPECTION (检验)
+ARTICLE 10 - INSPECTION
 Buyer or its representative may inspect the goods at the loading port
 before shipment. The inspection cost is borne by the Buyer.
 
-ARTICLE 11 - FORCE MAJEURE (不可抗力)
+ARTICLE 11 - FORCE MAJEURE
 Neither party shall be liable for failure to perform obligations due to
 force majeure events (natural disasters, war, strikes, government actions,
 epidemics). The affected party shall notify the other within 7 days and
 provide supporting documents within 30 days.
 
-ARTICLE 12 - DISPUTE RESOLUTION (争议解决)
+ARTICLE 12 - DISPUTE RESOLUTION
 All disputes arising from this contract shall be settled through friendly
 negotiation. If no settlement is reached within 60 days, the dispute shall
 be submitted to arbitration in ____________ (e.g., CIETAC Beijing).
 The arbitration award shall be final and binding on both parties.
 Applicable law: laws of the People's Republic of China.
 
-ARTICLE 13 - MISCELLANEOUS (其他)
+ARTICLE 13 - MISCELLANEOUS
 1. This contract is made in both Chinese and English, both versions equally
    authentic. In case of discrepancy, the English version prevails.
 2. Any amendment must be in writing and signed by both parties.
 3. This contract becomes effective upon signing by both parties.
 
-SELLER (卖方):                          BUYER (买方):
+SELLER:                                BUYER:
 
 Authorized Signature:                   Authorized Signature:
 Name / Title:                           Name / Title:
 Date:                                   Date:
 """
+
+CONTRACT_TEMPLATE_ZH = """销售合同
+
+合同编号：____________            签约日期：____________
+
+本合同由下列买卖双方共同订立：
+
+卖方：_________________________________
+地址：___________________________________
+电话：____________  邮箱：____________
+
+买方：_________________________________
+地址：___________________________________
+电话：____________  邮箱：____________
+
+买卖双方同意按下列条款和条件进行交易：
+
+第一条 商品及规格
++----+--------------+--------+---------+----------+----------+
+| 序号 | 品名及规格  | 海关编码 | 数量(件) | 单价(美元) | 金额(美元) |
++----+--------------+--------+---------+----------+----------+
+| 1  | ____________ | ______ | _______ | ________ | ________ |
+| 2  | ____________ | ______ | _______ | ________ | ________ |
+|    | 合计：       |        |         |          | ________ |
++----+--------------+--------+---------+----------+----------+
+
+第二条 原产地及质量
+原产地：中华人民共和国。
+质量标准：以买方认可的卖方规格及样品为准。
+
+第三条 合同总金额
+合同总金额：美元 ____________（大写：______________________ 整）
+* 本合同所有价格均以美元（USD）计价，为固定价格，不随汇率波动调整。
+
+第四条 贸易术语
+[ ] FOB 中国重庆/深圳（国际贸易术语解释通则 Incoterms 2020）
+[ ] CIF 加纳特马港（国际贸易术语解释通则 Incoterms 2020）
+
+第五条 包装及唛头
+包装：出口标准纸箱包装，适合远洋海运。
+唛头：按买方指示刷制于每件外包装箱上。
+
+第六条 装运港及目的港
+装运港：中国重庆/深圳
+目的港：加纳特马港（Tema Port, Ghana）
+
+第七条 付款条件 *** 重点条款 ***
+货款以电汇（T/T）方式支付：
+  1) 合同签订后___个工作日内，支付合同总金额的 30% 作为定金；
+  2) 余款 70% 于发货前（提单签发日前）付清。
+  卖方在收到 100% 货款之前，不得放货、不得电放提单。
+* 款未付清一律不放货。提单（B/L）即货权凭证。
+
+第八条 合规与认证
+卖方须提供以下单证：
+  [ ] 加纳海关清关用符合性证书（COC）
+  [ ] 商业发票（3 份正本）
+  [ ] 装箱单（3 份正本）
+  [ ] 提单（3 份正本或电放）
+  [ ] 原产地证（CO）
+COC 认证费用承担方：[ ] 卖方  [ ] 买方
+
+第九条 交货期
+卖方收到定金后___个工作日内安排发货。
+海运航期（中国至特马港）：约 35-45 天。
+
+第十条 检验
+买方或其指定代表可在发货前于装运港检验货物，检验费用由买方承担。
+
+第十一条 不可抗力
+任何一方因不可抗力事件（自然灾害、战争、罢工、政府行为、疫情等）
+不能履行本合同义务的，不承担违约责任。受影响方须在事件发生后 7 日内
+通知对方，并在 30 日内提供有关证明文件。
+
+第十二条 争议解决
+凡因本合同引起的争议，双方应友好协商解决；自争议提出之日起 60 日内
+协商不成的，提交____________仲裁（如：中国国际经济贸易仲裁委员会，
+北京）。仲裁裁决是终局的，对双方均有约束力。
+适用法律：中华人民共和国法律。
+
+第十三条 其他
+1. 本合同以中、英文书就，两种文本具有同等法律效力；如有歧义，以英文版为准。
+2. 本合同的任何修改、补充，须经双方书面同意并签字确认。
+3. 本合同自双方法定代表人或授权代表签字之日起生效。
+
+卖方（盖章）：                          买方（盖章）：
+
+授权签字：                              授权签字：
+姓名/职务：                             姓名/职务：
+日期：                                  日期：
+"""
+
+# 模板注册表：语言 → 模板文本（前端按语言切换）
+CONTRACT_TEMPLATES = {"en": CONTRACT_TEMPLATE_EN, "zh": CONTRACT_TEMPLATE_ZH}
+
+# 向后兼容旧引用（原双语混排模板已拆分为纯中文/纯英文两版）
+CONTRACT_TEMPLATE = CONTRACT_TEMPLATE_EN
 
 
 CONTRACT_REVIEW_SYSTEM = """你是一名资深国际贸易合同审核专家，擅长审核中国对非洲（特别是加纳）出口贸易合同。
@@ -1737,6 +1834,69 @@ def load_contract(cid):
     conn.close()
     return dict(r) if r else None
 
+
+# ---- 合同 PDF 导出（可选依赖 reportlab，未安装时优雅降级报错提示）----
+try:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import mm
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.enums import TA_CENTER
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+    from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer,
+                                    Preformatted)
+    _HAS_REPORTLAB = True
+except ImportError:
+    _HAS_REPORTLAB = False
+
+
+def contract_to_pdf(title, content, lang="zh"):
+    """
+    把合同文本排版为 A4 PDF，返回 bytes。
+    中文用 CID 内置字体 STSong-Light（无需字体文件，PDF 阅读器自带 CJK 支持）；
+    纯 ASCII 行（表格边框线等）用 Courier 等宽字体保持对齐。
+    依赖 reportlab（可选）：未安装时抛 RuntimeError 并给出安装指引。
+    """
+    if not _HAS_REPORTLAB:
+        raise RuntimeError("PDF 导出需要可选依赖 reportlab，"
+                           "请执行: pip install reportlab 后重启服务")
+
+    pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
+
+    st_title = ParagraphStyle("title", fontName="STSong-Light", fontSize=16,
+                              leading=22, alignment=TA_CENTER, spaceAfter=6)
+    st_sub = ParagraphStyle("sub", fontName="STSong-Light", fontSize=9,
+                            leading=13, alignment=TA_CENTER, textColor="#888888",
+                            spaceAfter=14)
+    st_cn = ParagraphStyle("cn", fontName="STSong-Light", fontSize=10.5,
+                           leading=16.5)
+    st_ascii = ParagraphStyle("ascii", fontName="Courier", fontSize=9,
+                              leading=12.5)
+
+    def esc(s):
+        return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+    story = [Paragraph(esc(title or "SALES CONTRACT"), st_title),
+             Paragraph("China-Ghana Trade Monitor", st_sub), Spacer(1, 2)]
+    for line in (content or "").splitlines():
+        line = line.rstrip()
+        if not line:
+            story.append(Spacer(1, 5))
+        elif line.isascii():
+            # 纯 ASCII 行（表格、下划线填空）用等宽字体，保持排版对齐
+            story.append(Preformatted(line, st_ascii))
+        else:
+            story.append(Paragraph(esc(line), st_cn))
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=A4,
+        leftMargin=18 * mm, rightMargin=18 * mm,
+        topMargin=16 * mm, bottomMargin=16 * mm,
+        title=title or "Contract", author="China-Ghana Trade Monitor")
+    doc.build(story)
+    return buf.getvalue()
+
 def save_quote(name, items, params, result, note=""):
     """
     保存报价单快照到 quotes 表。
@@ -2007,11 +2167,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass  # 关闭默认访问日志，保持控制台整洁
 
-    def _send(self, code, body, ctype="application/json; charset=utf-8"):
+    def _send(self, code, body, ctype="application/json; charset=utf-8", headers=None):
         data = body if isinstance(body, bytes) else json.dumps(body, ensure_ascii=False).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
+        for k, v in (headers or {}).items():
+            self.send_header(k, v)
         self.end_headers()
         self.wfile.write(data)
 
@@ -2073,10 +2235,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/quotes"):
             # 报价单列表
             self._send(200, {"quotes": list_quotes()})
-        elif self.path == "/api/contract/template":
-            # 合同模板
-            self._send(200, {"template": CONTRACT_TEMPLATE})
-        elif self.path == "/api/contract/history":
+        elif path == "/api/contract/template":
+            # 双语模板：?lang=zh|en 取单语；不带参数返回全部（template 键向后兼容=英文版）
+            # 注意用 path（已剥离查询串）匹配，否则带 ?lang= 的请求会落入下方 contract/{id} 兜底
+            q = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+            lang = (q.get("lang") or [""])[0]
+            if lang in CONTRACT_TEMPLATES:
+                self._send(200, {"lang": lang, "template": CONTRACT_TEMPLATES[lang]})
+            else:
+                self._send(200, {"zh": CONTRACT_TEMPLATES["zh"],
+                                 "en": CONTRACT_TEMPLATES["en"],
+                                 "template": CONTRACT_TEMPLATES["en"]})
+        elif path == "/api/contract/history":
             # 合同审核历史
             self._send(200, {"contracts": list_contracts()})
         elif path.startswith("/api/contract/"):
@@ -2243,6 +2413,29 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send(200, {"id": cid, "engine": engine, "review": result,
                              "risk_level": risk_level, "risk_score": risk_score,
                              "ts": datetime.now().strftime("%Y-%m-%d %H:%M")})
+        elif self.path == "/api/contract/pdf":
+            # 合同导出 PDF：请求体 {"title": "...", "content": "...", "lang": "zh|en"}
+            body = self._read_json()
+            title = (body.get("title") or "").strip() or ("销售合同" if body.get("lang") == "zh" else "SALES CONTRACT")
+            content = (body.get("content") or "").strip()
+            if not content:
+                self._send(400, {"error": "合同内容不能为空"})
+                return
+            try:
+                pdf_bytes = contract_to_pdf(title, content, body.get("lang") or "zh")
+            except RuntimeError as e:
+                self._send(503, {"error": str(e)})
+                return
+            except Exception as e:
+                self._send(500, {"error": "PDF 生成失败: %s" % e})
+                return
+            # 文件名转 ASCII 安全形式（Content-Disposition 用 RFC 5987 编码中文）
+            # 注意 re.ASCII：默认 \w 会放行中文字符，导致响应头 latin-1 编码崩溃
+            safe_name = re.sub(r'[^\w\.\- ]', '_', title, flags=re.ASCII)[:60].strip() or "contract"
+            self._send(200, pdf_bytes, "application/pdf", headers={
+                "Content-Disposition":
+                    "attachment; filename=\"%s.pdf\"; filename*=UTF-8''%s.pdf" % (
+                        safe_name, urllib.parse.quote(title or "contract"))})
         else:
             self._send(404, {"error": "not found"})
 

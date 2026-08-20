@@ -674,6 +674,10 @@
       return {
         title: '',
         content: '',
+        lang: 'zh',             // 'zh' | 'en' 双语模板切换
+        pristine: true,          // 内容是否仍是未修改的模板（切换语言时自动互换）
+        templates: { zh: '', en: '' },
+        downloading: false,
         reviewing: false,
         result: null,          // {engine, review, risk_level, risk_score, ts, id}
         showHistory: false,
@@ -697,10 +701,54 @@
       async loadTemplate() {
         try {
           const d = await api('/api/contract/template');
-          this.content = d.template;
-          this.title = '销售合同_' + new Date().toLocaleDateString('zh-CN').replace(/\//g, '');
-          ElMessage.success('已加载标准合同模板，请编辑后审核');
+          this.templates = { zh: d.zh || '', en: d.en || d.template || '' };
+          this.pristine = true;
+          this.content = this.templates[this.lang] || '';
+          this.title = (this.lang === 'zh' ? '销售合同_' : 'SalesContract_')
+            + new Date().toISOString().slice(0, 10).replace(/-/g, '');
+          ElMessage.success(this.lang === 'zh' ? '已加载中文合同模板' : '已加载英文合同模板');
         } catch (e) { ElMessage.error('加载模板失败: ' + e.message); }
+      },
+      switchLang(lang) {
+        if (lang === this.lang) return;
+        // 内容未被编辑过（仍是模板原文）→ 直接切换到对应语言模板
+        if (this.pristine && this.templates[lang]) {
+          this.lang = lang;
+          this.content = this.templates[lang];
+          this.title = (lang === 'zh' ? '销售合同_' : 'SalesContract_')
+            + new Date().toISOString().slice(0, 10).replace(/-/g, '');
+        } else {
+          this.lang = lang;
+          ElMessage.info('已切换语言（当前内容已编辑，保留原文；点击「加载模板」可重置为'
+            + (lang === 'zh' ? '中文' : '英文') + '模板）');
+        }
+      },
+      async downloadPdf() {
+        if (!this.content.trim()) { ElMessage.warning('合同内容为空，无法导出 PDF'); return; }
+        this.downloading = true;
+        try {
+          const res = await fetch('/api/contract/pdf', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title: this.title, content: this.content, lang: this.lang }),
+          });
+          if (!res.ok) {
+            let msg = 'HTTP ' + res.status;
+            try { msg = (await res.json()).error || msg; } catch (_) {}
+            throw new Error(msg);
+          }
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = (this.title || 'contract').replace(/[\\/:*?"<>|]/g, '_') + '.pdf';
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 3000);
+          ElMessage.success('PDF 已生成并开始下载');
+        } catch (e) { ElMessage.error('PDF 导出失败: ' + e.message); }
+        finally { this.downloading = false; }
       },
       async doReview() {
         if (!this.canReview) { ElMessage.warning('合同内容太短，请输入完整合同文本'); return; }
@@ -732,6 +780,7 @@
           const d = await api('/api/contract/' + id);
           this.title = d.title || '';
           this.content = d.content || '';
+          this.pristine = false;   // 历史合同内容 ≠ 模板，切换语言不再自动替换
           this.result = { engine: d.engine, review: d.review_result, risk_level: d.risk_level,
                           risk_score: d.risk_score, ts: (d.created_at || '').slice(0, 16), id: d.id };
           ElMessage.success('已加载历史合同审核记录');
@@ -748,16 +797,23 @@
       <div class="section-head">
         <div class="kicker">Contract Review</div>
         <h2>合同审核</h2>
-        <div class="desc">AI 审核贸易合同，逐条检查经营红线、付款条款、合规认证等（默认优先使用 DeepSeek 引擎，多通道容灾）。</div>
+        <div class="desc">中/英文标准合同模板，一键导出 PDF；AI 审核贸易合同，逐条检查经营红线、付款条款、合规认证等（默认优先使用 DeepSeek 引擎，多通道容灾）。</div>
       </div>
       <div class="contract-layout">
         <div class="contract-editor panel">
           <h3 class="panel-title"><span class="iconfont icon-file-earmark-text" style="color:#0071e3"></span>合同文本
             <span class="tip">编辑或粘贴合同全文</span></h3>
-          <div class="toolbar" style="margin-bottom:10px">
-            <el-input v-model="title" placeholder="合同标题" style="width:280px"></el-input>
+          <div class="toolbar" style="margin-bottom:10px;flex-wrap:wrap;gap:6px">
+            <el-input v-model="title" :placeholder="lang === 'zh' ? '合同标题' : 'Contract Title'" style="width:240px"></el-input>
+            <el-button-group style="margin:0 2px">
+              <el-button :type="lang === 'zh' ? 'primary' : ''" size="small" @click="switchLang('zh')">中文版</el-button>
+              <el-button :type="lang === 'en' ? 'primary' : ''" size="small" @click="switchLang('en')">English</el-button>
+            </el-button-group>
             <el-button @click="loadTemplate">
               <span class="iconfont icon-file-earmark-plus" style="margin-right:6px"></span>加载模板
+            </el-button>
+            <el-button @click="downloadPdf" :loading="downloading">
+              <span class="iconfont icon-download" style="margin-right:6px"></span>下载 PDF
             </el-button>
             <el-button type="primary" :loading="reviewing" :disabled="!canReview" @click="doReview">
               <span class="iconfont icon-magic" style="margin-right:6px"></span>AI 审核
@@ -766,8 +822,8 @@
               {{ showHistory ? '收起' : '查看' }}审核历史（{{ history.length }}）
             </el-button>
           </div>
-          <el-input v-model="content" type="textarea" :rows="22"
-            placeholder="在此粘贴或编辑合同全文…可点击"加载模板"使用标准合同模板"
+          <el-input v-model="content" type="textarea" :rows="22" @input="pristine = false"
+            placeholder="在此粘贴或编辑合同全文…可点击"加载模板"使用中/英文标准合同模板"
             style="font-family:monospace;font-size:12.5px"></el-input>
         </div>
         <div class="contract-result panel">
