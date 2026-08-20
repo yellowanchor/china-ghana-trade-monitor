@@ -51,9 +51,11 @@ from urllib.parse import urljoin
 
 # 可选的 CLIP 图像校验模块：依赖缺失时自动降级为纯规则过滤
 try:
+    import parts_vision
     from parts_vision import check_image
 except Exception as _e:
-    check_image = lambda img_url, kw: (None, None)
+    parts_vision = None
+    check_image = lambda img_url, kw, **_kw: (None, None)
 
 # ==============================================================================
 # 一、全局配置
@@ -232,8 +234,14 @@ def ai_enabled():
 
 def get_db():
     """获取数据库连接，并确保所有表已创建（幂等操作，可重复调用）。"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row  # 让查询结果可以按列名取值
+    try:
+        # WAL 模式：读写可并发（抓取长事务期间看板/纠正请求不再 database is locked）
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=30000")
+    except Exception:
+        pass
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS rates (          -- 汇率日表
             date     TEXT PRIMARY KEY,              -- 日期 YYYY-MM-DD
@@ -321,6 +329,18 @@ def get_db():
             context_json      TEXT DEFAULT '{}',     -- 预测时的市场上下文（汇率/政策等快照）
             created_at        TEXT
         );
+        CREATE TABLE IF NOT EXISTS vision_samples (  -- CLIP 视觉样本库（迭代学习）
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            keyword     TEXT NOT NULL,               -- 抓取关键词（对应 parts_quotes.keyword）
+            img_url     TEXT,                         -- 原图 URL
+            embedding   BLOB,                         -- CLIP 512 维嵌入（float32 → 2048 字节）
+            label       INTEGER NOT NULL,             -- 1=正例（确实是该商品）/ 0=负例（不是）
+            source      TEXT DEFAULT 'clip_auto',    -- clip_auto=自动判定 / user_correct=用户纠正
+            parts_id    INTEGER,                      -- 关联 parts_quotes.id（可空）
+            created_at  TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_vs_kw ON vision_samples(keyword);
+        CREATE INDEX IF NOT EXISTS idx_vs_label ON vision_samples(label);
     """)
     # 字段迁移：商品展示图、AI 图像校验结果（兼容旧库）
     for col_sql in (
@@ -848,9 +868,10 @@ def fetch_parts(keywords=None, save_top=30):
                 loc = (p.get("fhLocation") or "").strip()
                 img = (p.get("picUrl") or "").strip()
                 # 默认视为已确认：① 模型不可用时降级 ② 无图时无法判断
+                # db_conn=conn：CLIP 样本写入复用本事务连接（WAL 下按条提交，避免长事务锁库）
                 img_ok, img_conf = 1, None
                 if img:
-                    ok, conf = check_image(img, kw)
+                    ok, conf = check_image(img, kw, db_conn=conn)
                     if ok is None:
                         ml_skip += 1
                     elif ok:
@@ -869,6 +890,15 @@ def fetch_parts(keywords=None, save_top=30):
                      p.get("jUrl") or "", img, img_ok, img_conf, now))
                 if cur.rowcount > 0:
                     new_count += 1
+                    # 把刚存的 CLIP 样本关联到这条 parts_quotes（供用户纠正回查）
+                    if img and parts_vision and hasattr(parts_vision, "link_last_sample_to_parts"):
+                        try:
+                            parts_vision.link_last_sample_to_parts(cur.lastrowid, kw, img, conn=conn)
+                        except Exception:
+                            pass
+                # 按条提交：每张图的 CLIP 推理约 100ms，整批一个事务会锁库几十秒，
+                # 按条提交后单事务仅毫秒级，看板/纠正请求随时可插入
+                conn.commit()
             total = min(len(uniq), save_top)
             cq = conn.execute("SELECT COUNT(*) c FROM parts_quotes WHERE keyword=? AND location LIKE '重庆%'",
                               (kw,)).fetchone()["c"]
@@ -1536,6 +1566,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/categories"):
             # 品类主数据（8大品类×关税率/认证要求，来自《项目落地执行手册》§6.1）
             self._send(200, {"categories": CATEGORIES})
+        elif self.path.startswith("/api/vision/samples"):
+            # 视觉样本库统计（迭代学习用）：?keyword=摩托车链条 可选筛选
+            qs = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+            kw = qs.get("keyword", [None])[0]
+            stats = parts_vision.sample_stats(kw) if hasattr(parts_vision, "sample_stats") else {"error": "module outdated"}
+            self._send(200, stats)
         elif self.path.startswith("/api/quotes"):
             # 报价单列表
             self._send(200, {"quotes": list_quotes()})
@@ -1644,6 +1680,39 @@ class DashboardHandler(BaseHTTPRequestHandler):
             usd_cny = row["usd_cny"] if row else 7.2
             prediction = ai_quote_predict(items, params, manual_result, usd_cny)
             self._send(200, prediction)
+        elif self.path == "/api/vision/review":
+            # 用户纠正配件图像校验：请求体 {parts_id, label}
+            # label=1 表示"其实是该商品"（翻转为通过），label=0 表示"其实不是该商品"（翻转为否决）
+            body = self._read_json()
+            parts_id = body.get("parts_id")
+            label = body.get("label")
+            if parts_id is None or label not in (0, 1):
+                self._send(400, {"error": "参数 parts_id 和 label(0/1) 必填"})
+                return
+            conn = get_db()
+            try:
+                row = conn.execute(
+                    "SELECT id, keyword, img, img_ok FROM parts_quotes WHERE id=?",
+                    (parts_id,)
+                ).fetchone()
+                if not row:
+                    self._send(404, {"error": f"parts_id={parts_id} 不存在"})
+                    return
+                old_ok = int(row["img_ok"]) if row["img_ok"] is not None else 1
+                new_ok = int(label)
+                if old_ok == new_ok:
+                    self._send(200, {"ok": True, "msg": "状态未变化，无需更新", "skipped": True})
+                    return
+                conn.execute("UPDATE parts_quotes SET img_ok=? WHERE id=?", (new_ok, parts_id))
+                conn.commit()
+            finally:
+                conn.close()
+            # 记录 user_correct 样本（供后续抓取的 k-NN 覆盖使用）
+            msg = "状态已更新，但 CLIP 不可用，未记录样本"
+            if parts_vision and hasattr(parts_vision, "record_correction"):
+                ok, m = parts_vision.record_correction(parts_id, row["keyword"], row["img"] or "", new_ok)
+                msg = m
+            self._send(200, {"ok": True, "msg": msg, "old_img_ok": old_ok, "new_img_ok": new_ok})
         else:
             self._send(404, {"error": "not found"})
 

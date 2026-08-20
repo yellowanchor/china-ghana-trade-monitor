@@ -394,6 +394,19 @@
         if (q.img_ok === 0) return { cls: 'ai-bad', txt: 'AI ✗' };
         return { cls: 'ai-na', txt: 'AI -' };
       },
+      async reviewImg(row, label) {
+        const action = label === 1 ? '确认为该商品' : '标记为非该商品';
+        try {
+          const d = await api('/api/vision/review', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ parts_id: row.id, label }),
+          });
+          if (d.skipped) { ElMessage.info(d.msg); return; }
+          row.img_ok = d.new_img_ok;
+          ElMessage.success(action + '成功，' + d.msg + '，后续抓取将参考该样本');
+          this.load();
+        } catch (e) { ElMessage.error(action + '失败: ' + e.message); }
+      },
     },
     mounted() { this.load(); },
     template: `
@@ -401,7 +414,7 @@
       <div class="section-head">
         <div class="kicker">Parts Quotes</div>
         <h2>配件报价</h2>
-        <div class="desc">百度爱采购批发报价监控；AI 图像校验（CLIP）通过的商品标注 ✓，未装模型时自动降级纯规则。</div>
+        <div class="desc">百度爱采购批发报价监控；AI 图像校验（CLIP）通过的商品标注 ✓。每次抓取的图片都会存入样本库；发现误判点"纠正"，系统会从你的纠正中学习，下次自动修正。</div>
       </div>
       <div class="toolbar">
         <el-input v-model="fetchKw" placeholder="输入关键词抓取报价，如：摩托车离合器片" clearable style="width:300px"
@@ -475,6 +488,19 @@
             <template #default="{ row }">
               <span v-if="String(row.location || '').indexOf('重庆') >= 0" class="tag loc-hl">{{ row.location }}</span>
               <span v-else style="color:#424245">{{ row.location || '-' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="纠正" width="110" align="center">
+            <template #default="{ row }">
+              <el-button v-if="row.img && row.img_ok === 0" type="success" link size="small"
+                         @click="reviewImg(row, 1)" title="CLIP 误判了？点击确认这确实该商品，系统会学习该图">
+                确实是
+              </el-button>
+              <el-button v-else-if="row.img && row.img_ok === 1" type="danger" link size="small"
+                         @click="reviewImg(row, 0)" title="CLIP 误判了？点击确认这其实不是该商品，系统会学习该图">
+                其实不是
+              </el-button>
+              <span v-else style="color:#ccc;font-size:12px">—</span>
             </template>
           </el-table-column>
         </el-table>

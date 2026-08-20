@@ -24,9 +24,13 @@ parts_vision.py — 配件商品图像智能校验（CLIP 零样本图文匹配�
 import math
 import os
 import urllib.request
+import sqlite3
 
 # 模型目录（与 trade_monitor.py 同级的 models/clip/）
 MODEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "clip")
+
+# 视觉样本库 DB（与 trade_monitor.py 共用同一 SQLite）
+_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trade_monitor.db")
 
 # 判定通过需要同时满足：
 #   1) 目标商品的 cos_sim 必须严格高于所有负例（argmax 为正）
@@ -221,16 +225,22 @@ def label_for_keyword(kw):
     return "vehicle spare parts", core
 
 
-def check_image(img_url, keyword, min_conf=None):
+def check_image(img_url, keyword, min_conf=None, parts_id=None, db_conn=None):
     """
-    用 CLIP 对商品图做零样本分类，判断是否为 keyword 商品本身。
+    用 CLIP 对商品图做零样本分类 + k-NN 迭代学习。
+
+    流程：
+      1) CLIP 零样本分类（正/负文本标签 softmax）
+      2) k-NN 查询同关键词已确认样本，若相似度高则覆盖 CLIP 判定（用户纠正权重更高）
+      3) 自动存储本图 embedding + 最终判定为 clip_auto 样本（供后续迭代）
+
+    db_conn: 可选外部连接（fetch_parts 长事务中传入，样本写入复用同一事务，
+             避免"database is locked"）。传入时由调用方控制 commit。
 
     返回:
-        (True,  confidence)   模型确认是目标商品
-        (False, confidence)   模型判定不是目标商品
-        (None,  None)         模型不可用 / 图片下载失败（调用方应降级到规则过滤）
-
-    confidence 为「目标商品」在全部候选标签 softmax 中的概率。
+        (True,  confidence)   最终判定为目标商品
+        (False, confidence)   最终判定不是目标商品
+        (None,  None)         模型不可用 / 图片下载失败（调用方降级）
     """
     clip = _get_clip()
     if clip is None or not img_url:
@@ -243,6 +253,7 @@ def check_image(img_url, keyword, min_conf=None):
         # 图片 404 / 防盗链 / 非图格式 → 不因此误杀
         return None, None
 
+    # —— 步骤1: CLIP 零样本分类 ——
     label, core = label_for_keyword(keyword)
     positives = [
         f"a product photo of {label}",
@@ -265,8 +276,262 @@ def check_image(img_url, keyword, min_conf=None):
     confidence = float(probs[:len(positives)].sum())
 
     # 判定：最相似的标签必须是正例，且正例总概率不低于阈值
-    ok = bool(pos_sims.max() > neg_sims.max()) and confidence >= min_conf
-    return ok, round(confidence, 4)
+    clip_ok = bool(pos_sims.max() > neg_sims.max()) and confidence >= min_conf
+    final_ok = clip_ok
+
+    # —— 步骤2: k-NN 覆盖（迭代学习核心）——
+    # 查询同关键词已确认样本，若新图与某条 user_correct 样本 cos sim ≥ 0.85，
+    # 则用样本标签覆盖 CLIP 零样本判定（解决"图明明是该商品但 CLIP 误判为否"的问题）
+    try:
+        override, max_sim = knn_override(keyword, img_vec, db_conn=db_conn)
+        if override is not None and override != clip_ok:
+            final_ok = bool(override)
+            # 覆盖发生时，置信度反映最终判定（高=通过，低=否决）
+            confidence = max(confidence, 0.85) if final_ok else min(confidence, 0.15)
+    except Exception as e:
+        print(f"[vision] k-NN 覆盖异常（忽略）: {e}")
+
+    # —— 步骤3: 自动存储本图 embedding + 最终判定为 clip_auto 样本 ——
+    # 每次抓取都积累样本，让后续抓取从历史中学习
+    try:
+        store_sample(keyword, img_url, img_vec, int(final_ok),
+                     source='clip_auto', parts_id=parts_id, conn=db_conn)
+    except Exception as e:
+        print(f"[vision] 存样本失败（忽略）: {e}")
+
+    return final_ok, round(confidence, 4)
+
+
+# ============================================================================
+# 迭代学习：视觉样本库（vision_samples 表）
+# ============================================================================
+
+def _get_db():
+    """连接视觉样本库（与 trade_monitor 共用同一 SQLite 文件）。
+    WAL + busy_timeout：与抓取长事务并发时等待而非立即报 locked。"""
+    conn = sqlite3.connect(_DB_PATH, timeout=30)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=30000")
+    except Exception:
+        pass
+    return conn
+
+
+def store_sample(keyword, img_url, embedding, label, source='clip_auto', parts_id=None, conn=None):
+    """
+    存一条视觉样本到 vision_samples 表。
+
+    embedding: numpy 512 维归一化向量 / bytes / None
+    label:     1=正例（确实是该商品）/ 0=负例（不是）
+    source:    'clip_auto'（自动判定）/ 'user_correct'（用户纠正，权重更高）
+    parts_id:  关联 parts_quotes.id（可空）
+    conn:      可选外部连接（fetch_parts 长事务中复用同一连接，避免锁冲突）；
+               传入时由调用方控制 commit，本函数不 commit 不 close。
+    """
+    if embedding is None:
+        return
+    np = __import__('numpy')
+    if isinstance(embedding, (bytes, bytearray)):
+        emb_blob = bytes(embedding)
+    else:
+        emb_blob = bytes(np.asarray(embedding, dtype=np.float32).tobytes())
+    from datetime import datetime
+    own = conn is None
+    if own:
+        conn = _get_db()
+    try:
+        conn.execute(
+            "INSERT INTO vision_samples (keyword, img_url, embedding, label, source, parts_id, created_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (keyword, img_url, emb_blob, int(label), source, parts_id,
+             datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        )
+        if own:
+            conn.commit()
+    finally:
+        if own:
+            conn.close()
+
+
+def knn_override(keyword, img_vec, k=5, sim_threshold=0.85, inherit_threshold=0.90, db_conn=None):
+    """
+    对同关键词已确认样本做加权 k-NN。
+
+    规则：
+      - top1 cos sim ≥ 0.90：几乎相同的图 → 直接继承 top1 样本标签（用户纠正一张，
+        同款图以后全部自动跟着纠正——这是迭代学习的核心）
+      - 0.85 ≤ top1 cos sim < 0.90：相近图 → 加权投票（user_correct 权重 2x）
+      - top1 cos sim < 0.85：不够相似 → 不覆盖，维持 CLIP 零样本判定
+
+    db_conn: 可选外部只读连接（fetch_parts 长事务中复用）。
+    返回: (override_label, max_sim)
+      override_label: 1=覆盖为正例 / 0=覆盖为负例 / None=不覆盖
+    """
+    clip = _get_clip()
+    if clip is None:
+        return None, 0.0
+    np = clip.np
+    own = db_conn is None
+    conn = db_conn if db_conn is not None else _get_db()
+    try:
+        rows = conn.execute(
+            "SELECT embedding, label, source FROM vision_samples "
+            "WHERE keyword=? AND embedding IS NOT NULL",
+            (keyword,)
+        ).fetchall()
+    finally:
+        if own:
+            conn.close()
+    if not rows:
+        return None, 0.0
+
+    sims = []
+    for r in rows:
+        try:
+            vec = np.frombuffer(bytes(r["embedding"]), dtype=np.float32)
+        except Exception:
+            continue
+        if vec.shape[0] != 512:
+            continue
+        sim = float((img_vec * vec).sum())   # 两个向量都已归一化，点积即 cos sim
+        weight = 2.0 if r["source"] == "user_correct" else 1.0
+        sims.append((sim, int(r["label"]), weight))
+
+    if not sims:
+        return None, 0.0
+    sims.sort(key=lambda x: -x[0])          # 相似度降序
+    top = sims[:k]
+    max_sim = top[0][0]
+    if max_sim < sim_threshold:
+        return None, max_sim                 # 不够相似，不覆盖
+
+    # 规则1：与 top1 样本几乎相同 → 直接继承其标签
+    if max_sim >= inherit_threshold:
+        return top[0][1], max_sim
+
+    # 规则2：相近图 → 加权多数投票
+    pos_w = sum(w for s, l, w in top if l == 1)
+    neg_w = sum(w for s, l, w in top if l == 0)
+    if pos_w > neg_w:
+        return 1, max_sim
+    if neg_w > pos_w:
+        return 0, max_sim
+    return None, max_sim                      # 平票，不覆盖
+
+
+def record_correction(parts_id, keyword, img_url, new_label):
+    """
+    用户纠正：把 parts_quotes.img_ok 翻转为 new_label，并存一条 user_correct 样本。
+
+    优先从 vision_samples 缓存里拿 embedding（避免重复下载图片）；
+    缓存未命中则重新下载+编码。
+
+    返回: (success: bool, msg: str)
+    """
+    clip = _get_clip()
+    if clip is None:
+        return False, "CLIP 不可用，无法记录样本"
+    np = clip.np
+
+    # 步骤1: 缓存查找（按 parts_id → 按 keyword+img_url 兜底）
+    emb_blob = None
+    conn = _get_db()
+    try:
+        if parts_id:
+            row = conn.execute(
+                "SELECT embedding FROM vision_samples WHERE parts_id=? ORDER BY id DESC LIMIT 1",
+                (parts_id,)
+            ).fetchone()
+            if row and row["embedding"]:
+                emb_blob = bytes(row["embedding"])
+        if emb_blob is None and keyword and img_url:
+            row = conn.execute(
+                "SELECT embedding FROM vision_samples WHERE keyword=? AND img_url=? ORDER BY id DESC LIMIT 1",
+                (keyword, img_url)
+            ).fetchone()
+            if row and row["embedding"]:
+                emb_blob = bytes(row["embedding"])
+    finally:
+        conn.close()
+
+    # 步骤2: 缓存未命中则重新下载+编码
+    if emb_blob is None:
+        if not img_url:
+            return False, "无图片 URL，无法记录样本"
+        try:
+            vec = clip.encode_image(img_url)
+            emb_blob = bytes(vec.astype(np.float32).tobytes())
+        except Exception as e:
+            return False, f"图片编码失败: {e}"
+
+    # 步骤3: 存为 user_correct 样本（保留全量历史，不删旧样本）
+    from datetime import datetime
+    conn = _get_db()
+    try:
+        conn.execute(
+            "INSERT INTO vision_samples (keyword, img_url, embedding, label, source, parts_id, created_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (keyword, img_url, emb_blob, int(new_label), 'user_correct', parts_id,
+             datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return True, f"已记录用户纠正样本（label={'正例' if new_label == 1 else '负例'}）"
+
+
+def sample_stats(keyword=None):
+    """返回视觉样本库统计：各关键词样本数 / 正负例分布 / 来源分布。"""
+    conn = _get_db()
+    try:
+        if keyword:
+            rows = conn.execute(
+                "SELECT source, label, COUNT(*) n FROM vision_samples WHERE keyword=? GROUP BY source, label",
+                (keyword,)
+            ).fetchall()
+            total = conn.execute("SELECT COUNT(*) FROM vision_samples WHERE keyword=?", (keyword,)).fetchone()[0]
+        else:
+            rows = conn.execute(
+                "SELECT source, label, COUNT(*) n FROM vision_samples GROUP BY source, label"
+            ).fetchall()
+            total = conn.execute("SELECT COUNT(*) FROM vision_samples").fetchone()[0]
+        # 按关键词统计
+        kw_rows = conn.execute(
+            "SELECT keyword, COUNT(*) n, SUM(CASE WHEN label=1 THEN 1 ELSE 0 END) pos, "
+            "SUM(CASE WHEN source='user_correct' THEN 1 ELSE 0 END) uc "
+            "FROM vision_samples GROUP BY keyword ORDER BY n DESC"
+        ).fetchall()
+    finally:
+        conn.close()
+    return {
+        "total": total,
+        "breakdown": [{"source": r["source"], "label": r["label"], "n": r["n"]} for r in rows],
+        "by_keyword": [{"keyword": r["keyword"], "n": r["n"], "pos": r["pos"], "user_corrections": r["uc"]} for r in kw_rows],
+    }
+
+
+def link_last_sample_to_parts(parts_id, keyword, img_url, conn=None):
+    """
+    fetch_parts 在 INSERT parts_quotes 后调用：把刚存的 clip_auto 样本关联到这条 parts_quotes。
+    匹配条件：keyword + img_url + parts_id IS NULL，取最新一条。
+    conn: 可选外部连接（fetch_parts 长事务中复用）。
+    """
+    own = conn is None
+    if own:
+        conn = _get_db()
+    try:
+        conn.execute(
+            "UPDATE vision_samples SET parts_id=? "
+            "WHERE id=(SELECT MAX(id) FROM vision_samples WHERE keyword=? AND img_url=? AND parts_id IS NULL)",
+            (parts_id, keyword, img_url)
+        )
+        if own:
+            conn.commit()
+    finally:
+        if own:
+            conn.close()
 
 
 if __name__ == "__main__":
@@ -285,3 +550,6 @@ if __name__ == "__main__":
     for kw, url in tests:
         ok, p = check_image(url, kw)
         print(f"  {kw}  {'✓通过' if ok else '✗否决' if ok is not None else '?跳过'}  p={p}")
+    print("\n=== 视觉样本库统计 ===")
+    import json
+    print(json.dumps(sample_stats(), ensure_ascii=False, indent=2))
