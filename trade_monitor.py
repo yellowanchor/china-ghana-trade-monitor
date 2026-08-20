@@ -1547,10 +1547,513 @@ COC 认证费用承担方：[ ] 卖方  [ ] 买方
 日期：                                  日期：
 """
 
-# 模板注册表：语言 → 模板文本（前端按语言切换）
-CONTRACT_TEMPLATES = {"en": CONTRACT_TEMPLATE_EN, "zh": CONTRACT_TEMPLATE_ZH}
+# ==============================================================================
+# 合同模板库：多类型 × 双语（销售 / 采购 / 独家代理 / 货运代理 / 保密）
+# ==============================================================================
+
+CONTRACT_PURCHASE_ZH = """采购合同
+
+合同编号：____________            签订日期：____________
+签订地点：____________
+
+需方（买方）：_________________________________
+地址：___________________________________
+电话：____________  邮箱：____________
+
+供方（卖方）：_________________________________
+地址：___________________________________
+电话：____________  邮箱：____________
+
+供需双方同意按下列条款和条件进行交易：
+
+第一条 采购标的
++----+--------------+--------+---------+----------+----------+
+| 序号 | 品名及规格  | 型号   | 数量    | 单价(元)  | 金额(元)  |
++----+--------------+--------+---------+----------+----------+
+| 1  | ____________ | ______ | _______ | ________ | ________ |
+| 2  | ____________ | ______ | _______ | ________ | ________ |
+|    | 合计：       |        |         |          | ________ |
++----+--------------+--------+---------+----------+----------+
+
+第二条 质量标准
+符合国家标准 GB/__________ 及双方确认的样品/图纸；供方须随货提供出厂检验报告。
+
+第三条 合同总金额
+合同总金额：人民币 ____________ 元（大写：______________________ 整），
+含 13% 增值税，供方须开具增值税专用发票。
+
+第四条 交货方式及期限
+供方于预付款到账后 ___ 个工作日内，将货物送至需方指定仓库/装运口岸。
+
+第五条 验收
+货到 ___ 日内验收：数量、外观异议当场提出；质量异议在 ___ 日内书面提出。
+
+第六条 包装
+出口标准纸箱/木箱包装，适合集装箱海运；唛头按需方要求刷制。
+
+第七条 付款条件 *** 重点条款 ***
+1) 签约后 ___ 日内支付 30% 预付款；
+2) 验收合格且收到全额增值税专用发票后支付 70% 余款。
+
+第八条 违约责任
+逾期交货或逾期付款的，每日按合同总价的 0.5‰ 支付违约金，
+累计不超过合同总价的 5%。
+
+第九条 知识产权
+按需方图纸/样品生产的货物，其知识产权归需方所有；供方不得向任何第三方
+供应相同或类似货物。
+
+第十条 争议解决
+协商不成的，提交需方所在地人民法院诉讼解决。
+适用法律：中华人民共和国法律。
+
+第十一条 其他
+本合同一式两份，双方各执一份，自双方签字盖章之日起生效。
+"""
+
+CONTRACT_PURCHASE_EN = """PURCHASE CONTRACT
+
+Contract No.: _____________            Date: _____________
+Place of Signing: _____________
+
+PURCHASER (Buyer): _________________________________
+Address: ____________________________________
+Tel: _____________  Email: _____________
+
+SUPPLIER (Seller): _________________________________
+Address: ____________________________________
+Tel: _____________  Email: _____________
+
+The Purchaser agrees to purchase and the Supplier agrees to supply the
+following goods on the terms and conditions set forth below:
+
+ARTICLE 1 - GOODS
++---+-------------------+--------+----------+-----------+----------+
+| # | Description       | Model  | Qty      | Unit Price| Amount   |
+|   |                   |        |          | (RMB)     | (RMB)    |
++---+-------------------+--------+----------+-----------+----------+
+| 1 | _______________   | ______ | _______  | ________  | _______  |
+| 2 | _______________   | ______ | _______  | ________  | _______  |
+|   | Total:            |        |          |           | _______  |
++---+-------------------+--------+----------+-----------+----------+
+
+ARTICLE 2 - QUALITY
+The goods shall conform to Chinese National Standard GB/__________ and the
+samples / drawings approved by both parties. The Supplier shall provide
+factory inspection reports with the goods.
+
+ARTICLE 3 - TOTAL CONTRACT VALUE
+Total Contract Value: RMB ____________ (Say ______________ only),
+including 13% VAT; the Supplier shall issue a special VAT invoice.
+
+ARTICLE 4 - DELIVERY
+The Supplier shall deliver the goods to the warehouse / loading port
+designated by the Purchaser within ___ working days after receipt of the
+advance payment.
+
+ARTICLE 5 - INSPECTION & ACCEPTANCE
+The Purchaser shall inspect the goods within ___ days after delivery:
+objections to quantity or packing raised upon delivery; objections to
+quality raised in writing within ___ days.
+
+ARTICLE 6 - PACKING
+Export-standard cartons / wooden crates suitable for container sea
+transport; shipping marks as directed by the Purchaser.
+
+ARTICLE 7 - PAYMENT TERMS *** CRITICAL ***
+1) 30% advance payment within ___ days after signing;
+2) 70% balance after the goods pass acceptance and the Supplier issues
+   the full-amount special VAT invoice.
+
+ARTICLE 8 - LIABILITY FOR BREACH
+In case of delayed delivery or delayed payment, the defaulting party
+shall pay liquidated damages of 0.5%o of the total contract value per
+day, capped at 5% of the total contract value.
+
+ARTICLE 9 - INTELLECTUAL PROPERTY
+For goods manufactured per the Purchaser's drawings / samples, the
+intellectual property belongs to the Purchaser; the Supplier shall not
+supply identical or similar goods to any third party.
+
+ARTICLE 10 - DISPUTE RESOLUTION
+All disputes shall first be settled through friendly negotiation;
+failing that, submitted to the people's court at the place of the
+Purchaser. Applicable law: laws of the People's Republic of China.
+
+ARTICLE 11 - MISCELLANEOUS
+This contract is made in duplicate, one copy for each party, effective
+upon signing and sealing by both parties.
+"""
+
+CONTRACT_AGENCY_ZH = """独家经销与代理协议
+
+协议编号：____________            签订日期：____________
+
+甲方（供应商/委托方）：____________________（中国公司）
+乙方（代理商/经销方）：____________________（加纳公司）
+
+鉴于甲方拟在加纳市场销售其产品，乙方熟悉当地市场并具备销售能力，
+双方经友好协商达成如下协议：
+
+第一条 授权内容
+1. 甲方授予乙方在加纳共和国境内【 】独家 /【 】非独家销售代理权，
+   产品范围为：____________________________。
+2. 授权期限：自 ____ 年 __ 月 __ 日至 ____ 年 __ 月 __ 日（壹年），期满可续签。
+
+第二条 销售任务
+乙方年度销售任务：不低于 ______ 美元（或 ______ 台/套）。
+连续两个季度未完成任务 60% 的，甲方有权调整授权范围或终止本协议。
+
+第三条 价格与结算 *** 重点条款 ***
+1. 供货价：USD ______（FOB 中国港口 / CIF 加纳特马港，Incoterms 2020）。
+2. 结算方式：乙方以电汇（T/T）预付 100% 货款至甲方对公账户后，
+   甲方再安排发货；款未付清一律不放货。
+3. 乙方当地售价由乙方自行确定，但不得低于甲方建议零售价的 ___ %。
+
+第四条 双方义务
+甲方：保证产品质量与供应，提供产品资料、技术支持及必要的培训。
+乙方：积极开拓市场，按季度提交销售与库存报告，维护甲方品牌形象；
+独家授权期间不得销售竞争产品。
+
+第五条 合资合作（可选）
+双方拟在加纳设立合资公司，股比甲方 ____ %、乙方 ____ %，
+另行签署合资协议。
+
+第六条 售后与服务
+质保期 ___ 个月；质保期内非人为损坏的返修件，由甲方负责维修或更换，
+来回运费双方各付一段。
+
+第七条 保密
+双方对彼此的商业信息（价格、客户、技术资料）负有保密义务，
+协议终止后两年内持续有效。
+
+第八条 违约与终止
+一方严重违约的，守约方有权书面通知终止本协议并要求赔偿损失。
+
+第九条 不可抗力
+任何一方因不可抗力不能履行义务的，须在事件发生后 7 日内通知对方，
+并在 30 日内提供有关证明文件。
+
+第十条 争议解决
+协商不成的，提交中国国际经济贸易仲裁委员会（CIETAC）北京仲裁，
+仲裁裁决为终局，对双方均有约束力。适用法律：中华人民共和国法律。
+
+第十一条 其他
+本协议以中、英文书就，两种文本具有同等效力，如有歧义以英文版为准。
+一式两份，双方各执一份，自双方签字之日起生效。
+"""
+
+CONTRACT_AGENCY_EN = """EXCLUSIVE DISTRIBUTION & AGENCY AGREEMENT
+
+Agreement No.: _____________            Date: _____________
+
+Party A (Supplier / Principal): ______________ (a Chinese company)
+Party B (Agent / Distributor): ______________ (a Ghanaian company)
+
+WHEREAS Party A intends to sell its products in the Ghanaian market, and
+Party B is familiar with the local market and capable of distribution,
+the parties agree as follows:
+
+ARTICLE 1 - APPOINTMENT
+1. Party A appoints Party B as [ ] exclusive / [ ] non-exclusive
+   distributor within the Republic of Ghana for the following products:
+   ______________________________.
+2. Term: from ____ to ____ (one year), renewable upon expiry.
+
+ARTICLE 2 - SALES TARGET
+Party B's annual sales target: no less than USD ________ (or ______
+units). If the target is below 60% for two consecutive quarters, Party A
+may adjust the territory or terminate this Agreement.
+
+ARTICLE 3 - PRICING & SETTLEMENT *** CRITICAL ***
+1. Supply price: USD ________ (FOB Chinese port / CIF Tema Port,
+   Incoterms 2020).
+2. Payment: Party B pays 100% of the goods value in advance by T/T to
+   Party A's corporate account before shipment. No cargo release before
+   full payment.
+3. Party B determines local resale prices, which shall not be lower than
+   ___ % of Party A's suggested retail price.
+
+ARTICLE 4 - OBLIGATIONS
+Party A: guarantee product quality and supply; provide product
+materials, technical support and necessary training.
+Party B: actively develop the market; submit quarterly sales & inventory
+reports; maintain Party A's brand image; during the exclusive term, not
+sell competing products.
+
+ARTICLE 5 - JOINT VENTURE (OPTIONAL)
+The parties intend to establish a joint venture in Ghana with an equity
+structure of Party A ____ % / Party B ____ %, subject to a separate JV
+agreement.
+
+ARTICLE 6 - AFTER-SALES & WARRANTY
+Warranty period: ___ months. Within the warranty period, Party A repairs
+or replaces defective items not damaged by human factors; each party
+bears one leg of the freight.
+
+ARTICLE 7 - CONFIDENTIALITY
+Each party shall keep confidential the other's commercial information
+(prices, customers, technical data) for two years after termination.
+
+ARTICLE 8 - BREACH & TERMINATION
+Upon a material breach by either party, the non-defaulting party may
+terminate this Agreement by written notice and claim damages.
+
+ARTICLE 9 - FORCE MAJEURE
+Neither party shall be liable for failure caused by force majeure; the
+affected party shall notify the other within 7 days and provide
+supporting documents within 30 days.
+
+ARTICLE 10 - DISPUTE RESOLUTION
+Disputes shall first be settled through friendly negotiation; failing
+settlement within 60 days, submitted to CIETAC (Beijing) for
+arbitration. The award shall be final and binding on both parties.
+Applicable law: laws of the People's Republic of China.
+
+ARTICLE 11 - MISCELLANEOUS
+This Agreement is made in both Chinese and English, both versions
+equally authentic; in case of discrepancy, the English version prevails.
+Made in duplicate, one copy for each party, effective upon signing.
+"""
+
+CONTRACT_FREIGHT_ZH = """国际货运代理协议
+
+协议编号：____________            签订日期：____________
+
+委托人（甲方）：_________________________________
+受托人（乙方，货运代理）：___________________________
+
+第一条 委托事项
+甲方委托乙方办理中国至加纳特马港（Tema Port, Ghana）的出口货物运输
+代理业务，包括：
+  [ ] 订舱与配载（整箱 FCL / 拼箱 LCL）
+  [ ] 拖车与内陆运输
+  [ ] 报关报检
+  [ ] 单证代办（商业发票、装箱单、原产地证 CO、符合性证书 COC）
+  [ ] 目的港清关协助与门到门派送
+
+第二条 费用与结算 *** 重点条款 ***
+1. 费用标准见附件《运价表》；运价随市场波动调整的，
+   乙方须提前 ___ 个工作日书面通知甲方。
+2. 结算方式：【 】预付 /【 】月结（次月 ___ 日前对账并付清）。
+3. 乙方收款账户须为对公账户；临时杂费须凭正规发票结算。
+
+第三条 甲方义务
+及时提供准确、齐全的托运资料（装箱单、发票、报关单证）；
+货物包装须适合海运；按时支付各项费用。
+
+第四条 乙方义务
+1. 妥善安排运输，海运段责任期间按提单条款执行；因乙方过失造成
+   货损货差的，按《国际货运代理业管理规定》及提单条款赔偿。
+2. 及时向甲方通报船期、动态及异常情况；电放提单须凭甲方书面
+   放货通知（且甲方确认货款已收讫）方可执行。
+
+第五条 延误与免责
+因不可抗力、船公司甩柜、海关查验等非乙方原因造成的延误，乙方免责，
+但须及时通知甲方并协助处理。
+
+第六条 协议期限
+自 ____ 年 __ 月 __ 日至 ____ 年 __ 月 __ 日；
+期满前 30 日双方均无异议的，自动顺延一年。
+
+第七条 争议解决
+协商不成的，提交____________（如：中国国际经济贸易仲裁委员会仲裁 /
+乙方所在地海事法院）解决。
+
+第八条 其他
+本协议一式两份，双方各执一份，自双方签字盖章之日起生效；
+附件《运价表》为本协议不可分割的组成部分。
+"""
+
+CONTRACT_FREIGHT_EN = """INTERNATIONAL FREIGHT FORWARDING AGREEMENT
+
+Agreement No.: _____________            Date: _____________
+
+Shipper (Party A): _________________________________
+Freight Forwarder (Party B): _________________________________
+
+ARTICLE 1 - SCOPE OF SERVICES
+Party A entrusts Party B with export freight forwarding from China to
+Tema Port, Ghana, covering:
+  [ ] Booking & stowage (FCL / LCL)
+  [ ] Trucking & inland haulage
+  [ ] Customs declaration & inspection
+  [ ] Documentation (Commercial Invoice, Packing List, Certificate of
+      Origin CO, Certificate of Conformity CoC)
+  [ ] Destination clearance assistance & door-to-door delivery
+
+ARTICLE 2 - CHARGES & SETTLEMENT *** CRITICAL ***
+1. Charges as per the attached Rate Schedule; any market-driven rate
+   adjustment shall be notified to Party A ___ working days in advance
+   in writing.
+2. Settlement: [ ] prepaid / [ ] monthly (reconciled and paid before
+   the ___ day of the following month).
+3. All payments shall go to Party B's corporate bank account;
+   incidental charges shall be settled against official invoices.
+
+ARTICLE 3 - OBLIGATIONS OF PARTY A
+Provide accurate and complete shipping documents (packing list,
+invoice, customs papers); ensure export-worthy packing; pay charges
+on time.
+
+ARTICLE 4 - OBLIGATIONS OF PARTY B
+1. Arrange carriage with due care; liability during the ocean leg
+   follows the B/L terms. For loss or damage caused by Party B's
+   fault, compensation follows the regulations on international
+   freight forwarding and the B/L terms.
+2. Keep Party A informed of schedules, movements and exceptions.
+   Telex release of the B/L may be executed only upon Party A's
+   written release instruction (with Party A's confirmation that full
+   payment has been received).
+
+ARTICLE 5 - DELAY & EXEMPTION
+Party B is not liable for delays caused by force majeure, carrier
+rolling, customs inspection or other causes beyond its control, but
+shall notify Party A promptly and assist in handling.
+
+ARTICLE 6 - TERM
+From ____ to ____; automatically extended for one year if neither
+party objects 30 days before expiry.
+
+ARTICLE 7 - DISPUTE RESOLUTION
+Disputes shall first be settled through friendly negotiation; failing
+that, submitted to ____________ (e.g., CIETAC arbitration / the
+maritime court at Party B's domicile).
+
+ARTICLE 8 - MISCELLANEOUS
+This Agreement is made in duplicate, one copy for each party,
+effective upon signing; the attached Rate Schedule forms an integral
+part hereof.
+"""
+
+CONTRACT_NDA_ZH = """保密协议（NDA）
+
+协议编号：____________            签订日期：____________
+
+披露方（甲方）：_________________________________
+接收方（乙方）：_________________________________
+
+鉴于双方拟就____________________（项目名称）开展合作洽谈，需交换保密
+信息，特订立本协议：
+
+第一条 保密信息
+指甲方以书面、口头、电子或其他形式披露的下列信息：商业计划、客户
+名单、供应商及价格信息、报价与成本数据、技术资料与图纸、合同条款、
+本协议内容以及双方正在洽谈这一事实本身。
+
+第二条 保密义务
+1. 乙方仅得将保密信息用于评估或履行上述合作目的，不得用于任何
+   其他用途。
+2. 未经甲方书面同意，乙方不得向任何第三方披露、提供保密信息；
+   仅可向因合作目的确有必要知悉的本方员工披露，并确保其遵守
+   同等保密义务。
+
+第三条 例外
+下列信息不受本协议约束：(1) 披露时已为公众所知悉的；(2) 非因乙方
+过错而公开的；(3) 乙方从无保密义务的第三方合法获得的；(4) 乙方
+独立开发且有证据证明的。
+
+第四条 返还与销毁
+合作未成或甲方要求时，乙方须在 ___ 日内返还或销毁全部保密信息
+载体，并书面确认。
+
+第五条 期限
+保密义务自知悉之日起 ___ 年内持续有效，不因合作终止而免除。
+
+第六条 违约责任
+乙方违反本协议的，须赔偿甲方因此遭受的全部损失（含合理维权费用），
+并支付违约金人民币/美元 ____________。
+
+第七条 争议解决
+协商不成的，提交____________仲裁 / ____________人民法院解决。
+适用法律：中华人民共和国法律。
+
+第八条 其他
+本协议一式两份，双方各执一份，自双方签字之日起生效。
+"""
+
+CONTRACT_NDA_EN = """NON-DISCLOSURE AGREEMENT (NDA)
+
+Agreement No.: _____________            Date: _____________
+
+Disclosing Party (Party A): _________________________________
+Receiving Party (Party B): _________________________________
+
+WHEREAS the parties intend to discuss cooperation on ______________
+(the "Project") and need to exchange confidential information, they
+agree as follows:
+
+ARTICLE 1 - CONFIDENTIAL INFORMATION
+means information disclosed by Party A in written, oral, electronic or
+other form, including: business plans, customer lists, supplier and
+pricing information, quotations and cost data, technical materials and
+drawings, contract terms, the content of this Agreement, and the very
+existence of the discussions.
+
+ARTICLE 2 - NON-DISCLOSURE OBLIGATIONS
+1. Party B may use the Confidential Information solely to evaluate or
+   perform the Project, and for no other purpose.
+2. Without Party A's written consent, Party B shall not disclose the
+   Confidential Information to any third party, and may disclose it
+   only to its own employees who need to know for the Project, ensuring
+   that they are bound by equivalent obligations.
+
+ARTICLE 3 - EXCEPTIONS
+Information is not protected hereunder if it: (1) is public at the
+time of disclosure; (2) becomes public other than through Party B's
+fault; (3) is lawfully obtained from a third party free of
+confidentiality obligations; (4) is independently developed by Party B
+with provable evidence.
+
+ARTICLE 4 - RETURN & DESTRUCTION
+If the cooperation fails or upon Party A's request, Party B shall
+return or destroy all carriers of the Confidential Information within
+___ days and confirm in writing.
+
+ARTICLE 5 - TERM
+The confidentiality obligations remain effective for ___ years from
+the date of disclosure, and survive termination of the cooperation.
+
+ARTICLE 6 - LIABILITY FOR BREACH
+Party B shall compensate Party A for all losses (including reasonable
+enforcement costs) and pay liquidated damages of RMB/USD ____________.
+
+ARTICLE 7 - DISPUTE RESOLUTION
+Disputes shall first be settled through negotiation; failing that,
+submitted to ____________ arbitration / ____________ court.
+Applicable law: laws of the People's Republic of China.
+
+ARTICLE 8 - MISCELLANEOUS
+This Agreement is made in duplicate, one copy for each party,
+effective upon signing.
+"""
+
+# 模板注册表：类型 → {zh/en 模板文本, 双语名称}（前端按类型+语言切换）
+CONTRACT_TEMPLATE_SETS = {
+    "sales": {
+        "zh": CONTRACT_TEMPLATE_ZH, "en": CONTRACT_TEMPLATE_EN,
+        "zh_label": "销售合同", "en_label": "Sales Contract",
+    },
+    "purchase": {
+        "zh": CONTRACT_PURCHASE_ZH, "en": CONTRACT_PURCHASE_EN,
+        "zh_label": "采购合同", "en_label": "Purchase Contract",
+    },
+    "agency": {
+        "zh": CONTRACT_AGENCY_ZH, "en": CONTRACT_AGENCY_EN,
+        "zh_label": "独家代理协议", "en_label": "Agency Agreement",
+    },
+    "freight": {
+        "zh": CONTRACT_FREIGHT_ZH, "en": CONTRACT_FREIGHT_EN,
+        "zh_label": "货运代理协议", "en_label": "Freight Forwarding Agreement",
+    },
+    "nda": {
+        "zh": CONTRACT_NDA_ZH, "en": CONTRACT_NDA_EN,
+        "zh_label": "保密协议", "en_label": "Non-Disclosure Agreement",
+    },
+}
 
 # 向后兼容旧引用（原双语混排模板已拆分为纯中文/纯英文两版）
+CONTRACT_TEMPLATES = {"en": CONTRACT_TEMPLATE_EN, "zh": CONTRACT_TEMPLATE_ZH}
 CONTRACT_TEMPLATE = CONTRACT_TEMPLATE_EN
 
 
@@ -2236,16 +2739,25 @@ class DashboardHandler(BaseHTTPRequestHandler):
             # 报价单列表
             self._send(200, {"quotes": list_quotes()})
         elif path == "/api/contract/template":
-            # 双语模板：?lang=zh|en 取单语；不带参数返回全部（template 键向后兼容=英文版）
+            # 多类型双语模板：?type=sales|purchase|agency|freight|nda & ?lang=zh|en
+            # 不带参数返回类型清单 + 默认销售合同双语（template 键向后兼容=英文版）
             # 注意用 path（已剥离查询串）匹配，否则带 ?lang= 的请求会落入下方 contract/{id} 兜底
             q = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+            ctype = (q.get("type") or ["sales"])[0]
             lang = (q.get("lang") or [""])[0]
-            if lang in CONTRACT_TEMPLATES:
-                self._send(200, {"lang": lang, "template": CONTRACT_TEMPLATES[lang]})
-            else:
-                self._send(200, {"zh": CONTRACT_TEMPLATES["zh"],
-                                 "en": CONTRACT_TEMPLATES["en"],
-                                 "template": CONTRACT_TEMPLATES["en"]})
+            if ctype not in CONTRACT_TEMPLATE_SETS:
+                ctype = "sales"
+            tset = CONTRACT_TEMPLATE_SETS[ctype]
+            types_list = [{"id": k, "zh": v["zh_label"], "en": v["en_label"]}
+                          for k, v in CONTRACT_TEMPLATE_SETS.items()]
+            payload = {"type": ctype,
+                       "zh": tset["zh"], "en": tset["en"], "template": tset["en"],
+                       "zh_label": tset["zh_label"], "en_label": tset["en_label"],
+                       "types": types_list}
+            if lang in ("zh", "en"):
+                payload["lang"] = lang
+                payload["template"] = tset[lang]
+            self._send(200, payload)
         elif path == "/api/contract/history":
             # 合同审核历史
             self._send(200, {"contracts": list_contracts()})

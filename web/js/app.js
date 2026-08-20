@@ -674,8 +674,17 @@
       return {
         title: '',
         content: '',
+        type: 'sales',          // 合同类型：sales/purchase/agency/freight/nda
+        types: [                // 类型清单（后端 /api/contract/template 会刷新）
+          { id: 'sales', zh: '销售合同', en: 'Sales Contract' },
+          { id: 'purchase', zh: '采购合同', en: 'Purchase Contract' },
+          { id: 'agency', zh: '独家代理协议', en: 'Agency Agreement' },
+          { id: 'freight', zh: '货运代理协议', en: 'Freight Forwarding Agreement' },
+          { id: 'nda', zh: '保密协议', en: 'Non-Disclosure Agreement' },
+        ],
+        curLabels: { zh: '销售合同', en: 'Sales Contract' },  // 当前类型双语名称（标题前缀用）
         lang: 'zh',             // 'zh' | 'en' 双语模板切换
-        pristine: true,          // 内容是否仍是未修改的模板（切换语言时自动互换）
+        pristine: true,          // 内容是否仍是未修改的模板（切换语言/类型时自动互换）
         templates: { zh: '', en: '' },
         downloading: false,
         reviewing: false,
@@ -700,14 +709,31 @@
       md2html,
       async loadTemplate() {
         try {
-          const d = await api('/api/contract/template');
+          const d = await api('/api/contract/template?type=' + this.type + '&lang=' + this.lang);
+          if (d.types && d.types.length) this.types = d.types;
+          this.curLabels = { zh: d.zh_label || '销售合同', en: d.en_label || 'Sales Contract' };
           this.templates = { zh: d.zh || '', en: d.en || d.template || '' };
           this.pristine = true;
           this.content = this.templates[this.lang] || '';
-          this.title = (this.lang === 'zh' ? '销售合同_' : 'SalesContract_')
+          this.title = this.titlePrefix(this.lang)
             + new Date().toISOString().slice(0, 10).replace(/-/g, '');
-          ElMessage.success(this.lang === 'zh' ? '已加载中文合同模板' : '已加载英文合同模板');
+          ElMessage.success('已加载' + this.curLabels[this.lang]
+            + '模板（' + (this.lang === 'zh' ? '中文版' : '英文版') + '）');
         } catch (e) { ElMessage.error('加载模板失败: ' + e.message); }
+      },
+      titlePrefix(lang) {
+        const name = this.curLabels[lang] || '';
+        return (lang === 'zh' ? name : name.replace(/\s+/g, '')) + '_';
+      },
+      switchType(t) {
+        if (t === this.type) return;
+        this.type = t;
+        // 内容未被编辑过（仍是模板原文）→ 直接载入新类型模板
+        if (this.pristine) {
+          this.loadTemplate();
+        } else {
+          ElMessage.info('已切换合同类型（当前内容已编辑，保留原文；点击「加载模板」可载入新类型模板）');
+        }
       },
       switchLang(lang) {
         if (lang === this.lang) return;
@@ -715,7 +741,7 @@
         if (this.pristine && this.templates[lang]) {
           this.lang = lang;
           this.content = this.templates[lang];
-          this.title = (lang === 'zh' ? '销售合同_' : 'SalesContract_')
+          this.title = this.titlePrefix(lang)
             + new Date().toISOString().slice(0, 10).replace(/-/g, '');
         } else {
           this.lang = lang;
@@ -797,13 +823,16 @@
       <div class="section-head">
         <div class="kicker">Contract Review</div>
         <h2>合同审核</h2>
-        <div class="desc">中/英文标准合同模板，一键导出 PDF；AI 审核贸易合同，逐条检查经营红线、付款条款、合规认证等（默认优先使用 DeepSeek 引擎，多通道容灾）。</div>
+        <div class="desc">多种合同模板（销售/采购/独家代理/货运代理/保密协议），每种均有中/英文两版，一键导出 PDF；AI 审核贸易合同，逐条检查经营红线、付款条款、合规认证等（默认优先使用 DeepSeek 引擎，多通道容灾）。</div>
       </div>
       <div class="contract-layout">
         <div class="contract-editor panel">
           <h3 class="panel-title"><span class="iconfont icon-file-earmark-text" style="color:#0071e3"></span>合同文本
             <span class="tip">编辑或粘贴合同全文</span></h3>
           <div class="toolbar" style="margin-bottom:10px;flex-wrap:wrap;gap:6px">
+            <el-select v-model="type" style="width:180px" @change="switchType">
+              <el-option v-for="t in types" :key="t.id" :value="t.id" :label="t.zh"></el-option>
+            </el-select>
             <el-input v-model="title" :placeholder="lang === 'zh' ? '合同标题' : 'Contract Title'" style="width:240px"></el-input>
             <el-button-group style="margin:0 2px">
               <el-button :type="lang === 'zh' ? 'primary' : ''" size="small" @click="switchLang('zh')">中文版</el-button>
@@ -823,7 +852,7 @@
             </el-button>
           </div>
           <el-input v-model="content" type="textarea" :rows="22" @input="pristine = false"
-            placeholder="在此粘贴或编辑合同全文…可点击"加载模板"使用中/英文标准合同模板"
+            placeholder="在此粘贴或编辑合同全文…可在上方选择合同类型，点击"加载模板"使用中/英文标准模板"
             style="font-family:monospace;font-size:12.5px"></el-input>
         </div>
         <div class="contract-result panel">
