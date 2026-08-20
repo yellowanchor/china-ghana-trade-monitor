@@ -473,7 +473,8 @@
           </el-table-column>
           <el-table-column label="发货地" width="110">
             <template #default="{ row }">
-              <span style="color:#424245">{{ row.location || '-' }}</span>
+              <span v-if="String(row.location || '').indexOf('重庆') >= 0" class="tag loc-hl">{{ row.location }}</span>
+              <span v-else style="color:#424245">{{ row.location || '-' }}</span>
             </template>
           </el-table-column>
         </el-table>
