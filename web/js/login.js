@@ -146,13 +146,16 @@
         }
         state.loading = true; setMsg('');
         try {
-          await api('/api/auth/register', {
-            account: state.account, username: state.username,
+          const d = await api('/api/auth/register', {
+            username: state.username,
             email: state.email, phone: state.phone,
             password: state.password, code: state.code, captcha: state.captchaToken,
           });
-          setMsg('注册成功，正在登录…', 'ok');
-          setTimeout(() => { window.location.href = '/'; }, 600);
+          // 注册成功后账号由系统自动生成（11 位易记号码），展示并复制方便记忆
+          const acc = d.account || (d.user && d.user.account) || '';
+          setMsg('注册成功！您的登录账号为：' + acc + '（已自动复制，请牢记）', 'ok');
+          try { if (navigator.clipboard) navigator.clipboard.writeText(acc); } catch (e) {}
+          setTimeout(() => { window.location.href = '/'; }, 2600);
         } catch (e) {
           setMsg(e.message, 'err');
         } finally { state.loading = false; }

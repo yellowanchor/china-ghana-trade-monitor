@@ -366,6 +366,53 @@ def pw_check(blob, plain):
     return pw_decrypt(blob) == plain
 
 
+# 后台直接建号默认密码（不走注册流程、由后台插入的账号统一使用 d12345678）
+DEFAULT_BACKEND_PW = "d12345678"
+
+
+def generate_account():
+    """注册成功后自动生成 11 位『易记』登录账号。
+
+    采用高重复规律的号码段（如 52052052052、13981398139），便于人工记忆；
+    并在数据库内保证唯一。
+    """
+    import random
+    conn = get_db()
+    for _ in range(80):
+        if random.random() < 0.5:
+            s = str(random.randint(100, 999))        # 3 位种子
+            acc = (s * 3 + s[:2])[:11]               # 52052052052
+        else:
+            s = str(random.randint(1000, 9999))      # 4 位种子
+            acc = (s * 2 + s[:3])[:11]               # 13981398139
+        if len(acc) == 11 and acc.isdigit() \
+                and not conn.execute("SELECT 1 FROM users WHERE account=?", (acc,)).fetchone():
+            conn.close()
+            return acc
+    conn.close()
+    return "1" + str(random.randint(10 ** 9, 10 ** 10 - 1))  # 极小概率兜底
+
+
+def add_backend_user(account, password=DEFAULT_BACKEND_PW, email="", phone="", username=""):
+    """后台直接插入账号（不走注册流程），默认密码 d12345678。返回 (ok, msg)。"""
+    account = (account or "").strip()
+    if not re.match(r"^\d{6,20}$", account):
+        return False, "账号应为 6-20 位数字"
+    conn = get_db()
+    if conn.execute("SELECT 1 FROM users WHERE account=?", (account,)).fetchone():
+        conn.close()
+        return False, "该账号已存在"
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    uname = (username or ("用户" + account[-4:])).strip()
+    conn.execute(
+        "INSERT INTO users(account,username,email,phone,pw_blob,created_at,updated_at) "
+        "VALUES(?,?,?,?,?,?,?)",
+        (account, uname, email or "", phone or "", pw_encrypt(password), now, now))
+    conn.commit()
+    conn.close()
+    return True, "已创建账号 %s（默认密码 %s）" % (account, password)
+
+
 # ---------------- 验证码（邮箱 / 短信）预留接口 ----------------
 def _gen_code():
     return "%06d" % secrets.randbelow(1000000)
@@ -3413,6 +3460,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/auth/send-code":
             return self._auth_send_code(body)
+        if path == "/api/auth/update":
+            return self._auth_update(body)
         return self._send(404, {"error": "not found"})
 
     def _auth_send_code(self, body):
@@ -3443,14 +3492,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
         ok, why = self._verify_captcha(body.get("captcha"))
         if not ok:
             return self._send(400, {"error": "请先完成人机验证", "captcha": True})
-        account = (body.get("account") or "").strip()
         username = (body.get("username") or "").strip()
         email = (body.get("email") or "").strip()
         phone = (body.get("phone") or "").strip()
         password = body.get("password") or ""
         code = (body.get("code") or "").strip()
-        if not re.match(r"^[A-Za-z0-9_]{4,20}$", account):
-            return self._send(400, {"error": "账号需为 4-20 位字母/数字/下划线"})
         if not username:
             return self._send(400, {"error": "用户名不能为空"})
         if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
@@ -3462,10 +3508,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return self._send(400, {"error": "密码至少 8 位，且同时包含字母和数字"})
         if not _verify_code(email, code, "register") and not _verify_code(phone, code, "register"):
             return self._send(400, {"error": "验证码错误或已过期"})
+        account = generate_account()   # 注册成功自动生成 11 位易记账号（用户无需自设）
         conn = get_db()
-        if conn.execute("SELECT 1 FROM users WHERE account=?", (account,)).fetchone():
-            conn.close()
-            return self._send(409, {"error": "该账号已被注册"})
         if conn.execute("SELECT 1 FROM users WHERE email=?", (email,)).fetchone():
             conn.close()
             return self._send(409, {"error": "该邮箱已被注册"})
@@ -3481,7 +3525,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         conn.commit()
         conn.close()
         token = _create_session(uid)
-        self._send(200, {"ok": True, "user": _user_public({
+        self._send(200, {"ok": True, "account": account, "user": _user_public({
             "id": uid, "account": account, "username": username, "email": email,
             "phone": phone, "realname_status": 0})},
             headers={"Set-Cookie": self._cookie_header(token)})
@@ -3501,6 +3545,44 @@ class DashboardHandler(BaseHTTPRequestHandler):
         token = _create_session(u["id"])
         self._send(200, {"ok": True, "user": _user_public(dict(u))},
                    headers={"Set-Cookie": self._cookie_header(token)})
+
+    def _auth_update(self, body):
+        """已登录用户自主更新资料/密码（账号设置）。"""
+        u = self.current_user()
+        if not u:
+            return self._send(401, {"error": "unauthorized", "login": True})
+        conn = get_db()
+        fields = {}
+        if body.get("username"):
+            fields["username"] = (body["username"] or "").strip()
+        if body.get("email"):
+            em = (body["email"] or "").strip()
+            if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", em):
+                conn.close(); return self._send(400, {"error": "邮箱格式不正确"})
+            if conn.execute("SELECT 1 FROM users WHERE email=? AND id!=?", (em, u["id"])).fetchone():
+                conn.close(); return self._send(409, {"error": "该邮箱已被占用"})
+            fields["email"] = em
+        if body.get("phone"):
+            ph = (body["phone"] or "").strip()
+            if not re.match(r"^1\d{10}$", ph):
+                conn.close(); return self._send(400, {"error": "手机号格式不正确"})
+            if conn.execute("SELECT 1 FROM users WHERE phone=? AND id!=?", (ph, u["id"])).fetchone():
+                conn.close(); return self._send(409, {"error": "该手机号已被占用"})
+            fields["phone"] = ph
+        if body.get("password"):
+            pw = body["password"] or ""
+            if len(pw) < 8 or not re.search(r"[A-Za-z]", pw) or not re.search(r"\d", pw):
+                conn.close(); return self._send(400, {"error": "密码至少 8 位，且同时包含字母和数字"})
+            fields["pw_blob"] = pw_encrypt(pw)
+        if not fields:
+            conn.close(); return self._send(400, {"error": "没有需要更新的内容"})
+        fields["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        conn.execute("UPDATE users SET " + ", ".join("%s=?" % k for k in fields)
+                     + " WHERE id=?", list(fields.values()) + [u["id"]])
+        conn.commit()
+        row = conn.execute("SELECT * FROM users WHERE id=?", (u["id"],)).fetchone()
+        conn.close()
+        return self._send(200, {"ok": True, "user": _user_public(dict(row))})
 
 
 def build_summary():
@@ -3618,6 +3700,18 @@ def main():
                   f"{row['supplier'][:16]} | {row['location']}")
         conn.close()
         print("=" * 60)
+    elif cmd == "adduser":
+        # 后台插入账号（不走注册）：python trade_monitor.py adduser <账号> [--password d12345678] [--email x] [--phone x] [--username x]
+        import argparse
+        ap = argparse.ArgumentParser(description="后台插入账号（默认密码 d12345678）")
+        ap.add_argument("account")
+        ap.add_argument("--password", default=DEFAULT_BACKEND_PW)
+        ap.add_argument("--email", default="")
+        ap.add_argument("--phone", default="")
+        ap.add_argument("--username", default="")
+        ns = ap.parse_args(sys.argv[2:])
+        ok, msg = add_backend_user(ns.account, ns.password, ns.email, ns.phone, ns.username)
+        print(("成功: " if ok else "失败: ") + msg)
     else:
         print(__doc__)
 

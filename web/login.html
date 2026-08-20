@@ -60,15 +60,9 @@
 
   <!-- 注册 -->
   <form v-else @submit.prevent="register">
-    <div class="row2">
-      <div class="field">
-        <label>账号</label>
-        <input v-model.trim="account" placeholder="4-20位字母/数字" autocomplete="username" />
-      </div>
-      <div class="field">
-        <label>用户名</label>
-        <input v-model.trim="username" placeholder="昵称" />
-      </div>
+    <div class="field">
+      <label>用户名</label>
+      <input v-model.trim="username" placeholder="昵称" />
     </div>
     <div class="field">
       <label>邮箱（用于接收验证码）</label>
