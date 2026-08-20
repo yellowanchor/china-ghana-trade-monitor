@@ -1018,7 +1018,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   }
   /* number 输入框隐藏 spinner 箭头，避免遮挡数字、保证数字完整显示 */
   #calcGoodsTable input[type="number"] {
-    text-align: right;
+    text-align: left;
     -moz-appearance: textfield;
     appearance: textfield;
   }
@@ -1446,6 +1446,14 @@ function updateGoodsCount() {
   document.getElementById('goodsCount').textContent = '（' + n + ' 种商品）';
 }
 
+// 双精度浮点数呈现：整数补一位小数（1 → 1.0），已有小数保留原值
+function fmtDouble(v) {
+  if (v === '' || v === null || v === undefined) return v;
+  const n = parseFloat(v);
+  if (isNaN(n)) return v;
+  return Number.isInteger(n) ? n.toFixed(1) : String(n);
+}
+
 function addGoodsRow(item) {
   item = item || {};
   const tr = document.createElement('tr');
@@ -1453,11 +1461,15 @@ function addGoodsRow(item) {
     <td><input class="g-name" placeholder="如：摩托车链条"></td>
     <td><input class="g-price" type="number" min="0" value="${item.unit_price ?? ''}"></td>
     <td><input class="g-qty" type="number" min="0" value="${item.quantity ?? ''}"></td>
-    <td><input class="g-w" type="number" min="0" step="0.1" value="${item.unit_weight ?? ''}"></td>
+    <td><input class="g-w" type="number" min="0" step="0.1" value="${fmtDouble(item.unit_weight ?? '')}"></td>
     <td class="g-sub">—</td>
     <td><a href="javascript:void(0)" onclick="removeGoodsRow(this)" style="color:#ff3b30;font-size:13px" title="删除该商品">✕</a></td>`;
   if (item.name) tr.querySelector('.g-name').value = item.name;
   tr.querySelectorAll('input').forEach(el => el.addEventListener('input', doCalc));
+  // 重量失焦后格式化为双精度浮点数显示（1 → 1.0）
+  tr.querySelector('.g-w').addEventListener('blur', function () {
+    this.value = fmtDouble(this.value);
+  });
   document.getElementById('calcGoodsBody').appendChild(tr);
   updateGoodsCount();
 }
@@ -1497,7 +1509,7 @@ async function loadGoodsSource() {
     goodsSourceList = d.goods || [];
     sel.innerHTML = '<option value="">从商品库导入…（数据库预留接口）</option>'
       + goodsSourceList.map(g =>
-          `<option value="${g.id}">${escAttr(g.name)}｜¥${g.unit_price}｜${g.unit_weight}kg/件</option>`).join('');
+          `<option value="${g.id}">${escAttr(g.name)}｜¥${g.unit_price}｜${fmtDouble(g.unit_weight)}kg/件</option>`).join('');
   } catch (e) { console.error('goods:', e); }
 }
 
