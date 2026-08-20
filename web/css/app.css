@@ -295,6 +295,59 @@ html, body {
 .link-plain:hover { color: var(--accent); }
 .link-plain.active { color: var(--accent); font-weight: 700; }
 
+/* ===== AI 报价对比面板 ===== */
+.ai-compare-panel {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  background: var(--bg-2, #f5f5f7);
+}
+.compare-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  margin-bottom: 12px;
+}
+.compare-col {
+  padding: 12px 16px;
+}
+.compare-header {
+  font-size: 14px;
+  font-weight: 700;
+  margin-bottom: 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.compare-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 5px 0;
+  font-size: 13px;
+}
+.compare-row span { color: var(--text-3); }
+.compare-row b { font-size: 15px; }
+.compare-diff {
+  text-align: center;
+  font-size: 14px;
+  padding: 10px;
+  background: var(--card-bg);
+  border-radius: 8px;
+  margin-bottom: 12px;
+}
+.compare-reasoning {
+  font-size: 13px;
+  line-height: 1.7;
+  padding: 12px;
+  background: var(--card-bg);
+  border-radius: 8px;
+  border-left: 3px solid var(--accent);
+}
+.compare-reasoning h3 { font-size: 14px; margin: 8px 0 4px; }
+.compare-reasoning p { margin: 4px 0; }
+.compare-reasoning ul { margin: 4px 0; padding-left: 18px; }
+.compare-reasoning li { margin: 2px 0; }
+
 .parts-img {
   width: 48px; height: 48px; object-fit: cover;
   border-radius: 8px; border: 0.5px solid var(--border);

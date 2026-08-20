@@ -126,7 +126,55 @@ CALC_DEFAULT_ITEM = {
     "unit_price": 29.0,          # 采购单价（元/件）
     "quantity": 2000,            # 数量（件）
     "unit_weight": 1.0,          # 单件重量（kg/件）
+    "category": "",              # 品类key（选填，对应 CATEGORIES）
 }
+
+# ==============================================================================
+# 品类主数据（来自《项目落地执行手册》§6.1 品类准入与认证矩阵）
+# 每品类含：ECOWAS CET 关税率、EasyPASS CoC 要求、附加合规要求、HS编码前缀
+# ==============================================================================
+
+# 加纳进口附加税费率（除CET关税外的固定税费，来源：GRA / TaxLawGH 2026）
+# VAT 15% + NHIL 2.5% + GETFund 2.5% + ECOWAS 0.5% + AU 0.2% + EXIM 0.75% + 检验费~1%
+GHANA_EXTRA_TAX_PCT = 22.45
+
+CATEGORIES = [
+    {"key": "motor_parts",  "name": "摩托车配件",
+     "cet_duty": 10,  "coc": "exempt",   "hs_prefix": "8708.30",
+     "extra": "GSA高风险货物：加方须注册+建议随附CoA/CoC免抽检；建议按国际标准出中英文质检报告"},
+    {"key": "auto_parts",   "name": "汽车配件",
+     "cet_duty": 10,  "coc": "exempt",   "hs_prefix": "8708",
+     "extra": "同摩配规则；旧件按二手商品规则；GSA高风险须注册"},
+    {"key": "vehicle_new",  "name": "摩托车/汽车整车（新车）",
+     "cet_duty": 20,  "coc": "exempt_voluntary",  "hs_prefix": "8711/8703",
+     "extra": "整车进口商须向GSA注册+车型homologation认证；CBU整车与CKD散件税率差异大；另需DVLA上牌"},
+    {"key": "vehicle_used", "name": "二手整车",
+     "cet_duty": 35,  "coc": "pvoc_mandatory",   "hs_prefix": "8703/8711",
+     "extra": "2026-10-01起强制PVoC：出口前须检验发CoC；车龄≤10年/右舵未认证改装/无km/h里程表拒入"},
+    {"key": "general_goods","name": "小商品/日用百货/五金/塑料件",
+     "cet_duty": 20,  "coc": "required",  "hs_prefix": "HS25-96",
+     "extra": "FOB≥$2,000/票须出口前办CoC(Bureau Veritas在华)；英文标签"},
+    {"key": "light_electrical","name": "轻工电器（风扇/小家电等）",
+     "cet_duty": 20,  "coc": "required",  "hs_prefix": "HS84-85",
+     "extra": "强制英标BS1363三插+220-240V/50Hz；能源委员会能效标签(QR码)出口前贴好才能办CoC"},
+    {"key": "textiles",     "name": "纺织品/服装（新）",
+     "cet_duty": 20,  "coc": "required",  "hs_prefix": "HS50-63",
+     "extra": "高风险货物；仅限Kotoka机场/特马港/塔科拉迪港进口；部分纺织品处35%保护档"},
+    {"key": "used_goods",   "name": "二手商品（旧服装/旧货）",
+     "cet_duty": 0,   "coc": "exempt",    "hs_prefix": "HS63(旧衣)",
+     "extra": "需熏蒸证明/港口卫生证；禁入清单：旧内衣裤/手帕/床垫/洁具/旧冰箱/冷柜/LPG钢瓶/白炽灯灯泡"},
+]
+
+# 品类快速索引：key → 品类字典
+CATEGORY_MAP = {c["key"]: c for c in CATEGORIES}
+
+# 计算某品类的加纳综合税负率（CET关税 + 附加税费）
+def category_ghana_tax(cat_key):
+    """返回品类的加纳综合税负率（%）：CET关税 + VAT/NHIL/GETFund等附加税。"""
+    cat = CATEGORY_MAP.get(cat_key)
+    if not cat:
+        return CALC_DEFAULTS["ghana_tax"]    # 未知品类用全局默认
+    return round(cat["cet_duty"] + GHANA_EXTRA_TAX_PCT, 2)
 
 # ---------------------------- AI 智能分析配置 ----------------------------------
 # 配置文件 ai_config.json（与脚本同目录，首次运行自动生成模板）。
@@ -231,13 +279,47 @@ def get_db():
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             name        TEXT NOT NULL,              -- 商品名称
             sku         TEXT DEFAULT '',            -- SKU 编码（对齐《数据查询手册》主数据表）
-            category    TEXT DEFAULT '',            -- 分类（摩配/汽配/日用品…）
+            category    TEXT DEFAULT '',            -- 品类key（对应 CATEGORIES，如 motor_parts）
             unit_price  REAL DEFAULT 0,             -- 采购单价（元/件）
             unit_weight REAL DEFAULT 0,             -- 单件重量（kg/件）
+            unit_volume REAL DEFAULT 0,             -- 单件体积（m³/件，拼箱CBM计费用）
             moq         INTEGER DEFAULT 1,          -- 最小起订量（件）
+            hs_code     TEXT DEFAULT '',            -- HS 编码（10位，报关用）
+            tariff_rate REAL DEFAULT -1,            -- 加纳综合税负率（%，-1=用品类默认）
             source      TEXT DEFAULT 'manual',      -- 来源：manual人工 / ai文档识别 / photo照片识别 / auto抓取
             note        TEXT DEFAULT '',            -- 备注
             created_at  TEXT                        -- 录入时间
+        );
+        CREATE TABLE IF NOT EXISTS quotes (          -- 报价单快照（人工/AI预测对比用）
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT,                       -- 报价单名称（如"首单摩配5SKU"）
+            status      TEXT DEFAULT 'manual',      -- manual人工 / ai_predict / compared已对比
+            items_json  TEXT DEFAULT '[]',          -- 商品清单JSON（快照）
+            params_json TEXT DEFAULT '{}',          -- 费用参数JSON（快照）
+            total_cost  REAL DEFAULT 0,             -- 总成本（元）
+            quote       REAL DEFAULT 0,             -- 对加方报价（元）
+            quote_usd   REAL DEFAULT 0,             -- 报价折美元
+            profit      REAL DEFAULT 0,             -- 毛利（元）
+            margin_pct  REAL DEFAULT 0,             -- 毛利率（%）
+            markup      REAL DEFAULT 0,             -- 加价率（%）
+            usd_cny     REAL DEFAULT 7.2,           -- 保存时汇率
+            note        TEXT DEFAULT '',            -- 备注
+            created_at  TEXT                        -- 创建时间
+        );
+        CREATE TABLE IF NOT EXISTS ai_predictions (  -- AI报价预测记录（对比人工报价）
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            quote_id    INTEGER,                     -- 关联报价单ID（可空=独立预测）
+            engine      TEXT,                       -- 模型名 或 "rule"
+            predicted_markup   REAL DEFAULT 0,       -- AI建议加价率（%）
+            predicted_quote   REAL DEFAULT 0,        -- AI建议报价（元）
+            predicted_profit  REAL DEFAULT 0,        -- AI建议毛利（元）
+            manual_markup     REAL DEFAULT 0,        -- 人工加价率（%，对比基准）
+            manual_quote      REAL DEFAULT 0,        -- 人工报价（元）
+            diff_pct          REAL DEFAULT 0,        -- 报价差异率（%，正=AI更高）
+            reasoning         TEXT DEFAULT '',       -- AI推理过程（Markdown）
+            items_json        TEXT DEFAULT '[]',     -- 预测时的商品清单（快照）
+            context_json      TEXT DEFAULT '{}',     -- 预测时的市场上下文（汇率/政策等快照）
+            created_at        TEXT
         );
     """)
     # 字段迁移：商品展示图、AI 图像校验结果（兼容旧库）
@@ -245,6 +327,10 @@ def get_db():
         "ALTER TABLE parts_quotes ADD COLUMN img TEXT",
         "ALTER TABLE parts_quotes ADD COLUMN img_ok INTEGER DEFAULT 1",
         "ALTER TABLE parts_quotes ADD COLUMN img_conf REAL",
+        # goods 表新增字段（兼容旧库）
+        "ALTER TABLE goods ADD COLUMN unit_volume REAL DEFAULT 0",
+        "ALTER TABLE goods ADD COLUMN hs_code TEXT DEFAULT ''",
+        "ALTER TABLE goods ADD COLUMN tariff_rate REAL DEFAULT -1",
     ):
         try:
             conn.execute(col_sql)
@@ -800,11 +886,11 @@ def fetch_parts(keywords=None, save_top=30):
 
 def calc_profit(p=CALC_DEFAULTS, usd_cny=7.2):
     """
-    利润测算（多商品合并版）：输入商品清单与费用参数，输出报价/毛利/税负全套结果。
+    利润测算（多商品合并版 + 分品类税负）：输入商品清单与费用参数，输出报价/毛利/税负全套结果。
 
     参数结构（兼容两种格式）：
       多商品（推荐）:
-        {"items": [{"name","unit_price","quantity","unit_weight"}, ...],
+        {"items": [{"name","unit_price","quantity","unit_weight","category"}, ...],
          "freight_mode": "auto"|"fixed",
          "freight_base": 基础费(元), "freight_per_kg": 每公斤运费(元/kg),   # auto 用
          "freight": 固定海运物流费(元),                                     # fixed 用
@@ -816,6 +902,7 @@ def calc_profit(p=CALC_DEFAULTS, usd_cny=7.2):
           报价   = 总成本 × (1 + 加价率)
           毛利   = 报价 − 总成本
     海运物流费：auto 模式 = 基础费 + 每公斤运费 × Σ(单件重量×数量)；fixed 模式直接用固定金额。
+    加纳含税到岸：按各商品品类 CET关税 + 附加税费(VAT/NHIL/GETFund等) 分别计算后汇总。
     """
     # —— 商品清单：多商品 items > 旧格式单商品 > 默认示例 ——
     items = p.get("items") if isinstance(p.get("items"), list) and p.get("items") else None
@@ -826,24 +913,47 @@ def calc_profit(p=CALC_DEFAULTS, usd_cny=7.2):
         else:
             items = [dict(CALC_DEFAULT_ITEM)]
 
+    # —— 全局默认加纳税负（未指定品类的商品用此值）——
+    global_ghana_tax = float(p.get("ghana_tax") or CALC_DEFAULTS["ghana_tax"])
+
     detail = []
     total_weight = 0.0
     purchase = 0.0
+    ghana_landed_usd = 0.0           # 加纳含税到岸成本（美元）—— 按品类分别计算
     for it in items:
         up = float(it.get("unit_price") or 0)
         qty = float(it.get("quantity") or 0)
         uw = float(it.get("unit_weight") or 0)
+        cat_key = str(it.get("category") or "").strip()
         buy = up * qty                       # 该商品采购成本
         w = uw * qty                         # 该商品总重量（kg）
         total_weight += w
         purchase += buy
+        # —— 加纳端含税到岸成本（按品类税率分别计算）——
+        # 单商品FOB报价 = (采购成本 + 运费分摊 + 代理杂费分摊) × (1 + 加价率)
+        # CIF到岸美元 ≈ 单商品FOB报价折美元（FOB下运费/保险由买方承担，此处仅算进口税）
+        markup_pct = float(p.get("markup") or 0) / 100
+        item_cny = buy * (1 + markup_pct)    # 单商品FOB报价（粗略按成本比例分摊）
+        item_usd = item_cny / usd_cny
+        # 税率优先级：商品自带 tariff_rate > 用品类默认 > 全局 ghana_tax
+        item_tariff = float(it.get("tariff_rate") or -1)
+        if item_tariff < 0:                 # 商品未指定 → 用品类默认
+            item_tax_pct = category_ghana_tax(cat_key) if cat_key else global_ghana_tax
+        else:
+            item_tax_pct = item_tariff
+        item_landed = item_usd * (1 + item_tax_pct / 100)
+        ghana_landed_usd += item_landed
         detail.append({
             "name": str(it.get("name") or f"商品{len(detail)+1}"),
+            "category": cat_key,
+            "category_name": CATEGORY_MAP.get(cat_key, {}).get("name", ""),
             "unit_price": round(up, 2),
             "quantity": qty,
             "unit_weight": round(uw, 3),
             "purchase": round(buy, 2),
             "weight": round(w, 2),
+            "ghana_tax_pct": item_tax_pct,
+            "item_landed_usd": round(item_landed, 2),
         })
 
     # —— 海运物流费：auto 按总重量估算 / fixed 固定金额 ——
@@ -862,7 +972,6 @@ def calc_profit(p=CALC_DEFAULTS, usd_cny=7.2):
     profit = quote - total_cost                                         # 毛利（元）
     quote_usd = quote / usd_cny                                         # 报价折美元
     deposit = quote * float(p.get("deposit_ratio") or 0) / 100          # 定金（先收再采购）
-    ghana_landed = quote_usd * (1 + float(p.get("ghana_tax") or 0) / 100)  # 加纳端含税到岸成本（美元）
     return {
         "items": detail,
         "count": len(detail),
@@ -878,7 +987,7 @@ def calc_profit(p=CALC_DEFAULTS, usd_cny=7.2):
         "profit": round(profit, 2),
         "margin_pct": round(profit / quote * 100, 2) if quote else 0,
         "deposit": round(deposit, 2),
-        "ghana_landed_usd": round(ghana_landed, 2),
+        "ghana_landed_usd": round(ghana_landed_usd, 2),
         "share_a": round(profit * float(p.get("equity_a") or 0) / 100, 2),         # 重庆合伙人分成
         "share_b": round(profit * (100 - float(p.get("equity_a") or 0)) / 100, 2)  # 深圳合伙人分成
     }
@@ -1096,8 +1205,241 @@ def ask_ai(question):
     ])
 
 
+# ==============================================================================
+# 六·B、报价单管理（保存/加载/列表）+ AI 报价预测对比
+# ==============================================================================
+
+def save_quote(name, items, params, result, note=""):
+    """
+    保存报价单快照到 quotes 表。
+    name: 报价单名称; items: 商品清单; params: 费用参数;
+    result: calc_profit() 返回的测算结果; note: 备注
+    返回新建的 quote_id。
+    """
+    conn = get_db()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    cur = conn.execute(
+        "INSERT INTO quotes (name, status, items_json, params_json, "
+        "total_cost, quote, quote_usd, profit, margin_pct, markup, usd_cny, note, created_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (name, "manual", json.dumps(items, ensure_ascii=False),
+         json.dumps(params, ensure_ascii=False),
+         result.get("total_cost", 0), result.get("quote", 0), result.get("quote_usd", 0),
+         result.get("profit", 0), result.get("margin_pct", 0),
+         params.get("markup", 0), result.get("usd_cny", 7.2), note, now))
+    quote_id = cur.lastrowid
+    conn.commit(); conn.close()
+    return quote_id
 
 
+def list_quotes(limit=50):
+    """返回报价单列表（不含商品明细JSON，只含摘要字段）。"""
+    conn = get_db()
+    rows = [dict(r) for r in conn.execute(
+        "SELECT id, name, status, total_cost, quote, quote_usd, profit, "
+        "margin_pct, markup, usd_cny, note, created_at "
+        "FROM quotes ORDER BY id DESC LIMIT ?", (limit,))]
+    conn.close()
+    return rows
+
+
+def load_quote(quote_id):
+    """加载报价单完整内容（含商品清单和费用参数）。"""
+    conn = get_db()
+    row = conn.execute("SELECT * FROM quotes WHERE id=?", (quote_id,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    d = dict(row)
+    d["items"] = json.loads(d.get("items_json") or "[]")
+    d["params"] = json.loads(d.get("params_json") or "{}")
+    # 关联的 AI 预测记录
+    ai_rows = [dict(r) for r in conn.execute(
+        "SELECT id, engine, predicted_markup, predicted_quote, predicted_profit, "
+        "manual_markup, manual_quote, diff_pct, reasoning, created_at "
+        "FROM ai_predictions WHERE quote_id=? ORDER BY id DESC", (quote_id,))]
+    d["ai_predictions"] = ai_rows
+    conn.close()
+    return d
+
+
+def save_goods(g):
+    """
+    保存商品到 goods 表（新增或更新）。
+    g: dict with name/sku/category/unit_price/unit_weight/unit_volume/moq/hs_code/tariff_rate/source/note
+    返回 goods id。
+    """
+    conn = get_db()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    gid = g.get("id")
+    fields = {
+        "name": g.get("name", ""), "sku": g.get("sku", ""),
+        "category": g.get("category", ""), "unit_price": float(g.get("unit_price") or 0),
+        "unit_weight": float(g.get("unit_weight") or 0),
+        "unit_volume": float(g.get("unit_volume") or 0),
+        "moq": int(g.get("moq") or 1), "hs_code": g.get("hs_code", ""),
+        "tariff_rate": float(g.get("tariff_rate", -1) or -1),
+        "source": g.get("source", "manual"), "note": g.get("note", ""),
+    }
+    if gid:
+        set_clause = ", ".join(f"{k}=?" for k in fields)
+        conn.execute(f"UPDATE goods SET {set_clause} WHERE id=?",
+                     (*fields.values(), gid))
+    else:
+        cols = ", ".join(list(fields.keys()) + ["created_at"])
+        phs = ", ".join(["?"] * (len(fields) + 1))
+        conn.execute(f"INSERT INTO goods ({cols}) VALUES ({phs})",
+                     (*fields.values(), now))
+        gid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    conn.commit(); conn.close()
+    return gid
+
+
+def ai_quote_predict(items, params, manual_result, usd_cny):
+    """
+    AI 报价预测：基于商品清单、费用参数、市场上下文，让大模型预测最优加价率/报价。
+    与人工报价对比，返回预测结果 + 推理过程。
+    未配置 AI Key 时降级为规则引擎（基于品类平均利润率推荐）。
+    """
+    # 构建市场上下文
+    ctx = build_daily_context()
+    manual_markup = float(params.get("markup", 0))
+    manual_quote = manual_result.get("quote", 0)
+    manual_profit = manual_result.get("profit", 0)
+    total_cost = manual_result.get("total_cost", 0)
+
+    # 商品品类信息
+    item_summary = []
+    for it in items:
+        cat_key = it.get("category", "")
+        cat_name = CATEGORY_MAP.get(cat_key, {}).get("name", "未分类")
+        cet = CATEGORY_MAP.get(cat_key, {}).get("cet_duty", "—")
+        item_summary.append(
+            f"- {it.get('name','')}: 单价¥{it.get('unit_price',0)} × {it.get('quantity',0)}件 "
+            f"(重{it.get('unit_weight',0)}kg/件, 品类={cat_name}, CET关税={cet}%)")
+
+    context_block = {
+        "商品清单": item_summary,
+        "当前汇率": f"USD/CNY={usd_cny:.4f}, USD/GHS={ctx['latest_rate']['usd_ghs'] if ctx['latest_rate'] else 'N/A'}",
+        "塞地30日变动": f"{ctx.get('ghs_change_pct','N/A')}%",
+        "人工报价": f"加价率={manual_markup}%, 报价=¥{manual_quote:.2f} (${manual_quote/usd_cny:.2f}), "
+                    f"毛利=¥{manual_profit:.2f}, 总成本=¥{total_cost:.2f}",
+        "品类参考": "摩配/汽配CET=10%, 整车新品=20%, 电器/纺织=20-35%, 二手=0%",
+    }
+
+    if ai_enabled():
+        try:
+            prompt = (
+                f"以下是当前贸易报价数据（JSON）：\n{json.dumps(context_block, ensure_ascii=False, indent=1)}\n\n"
+                "请基于以上数据，预测对加纳买家的最优报价策略。输出JSON格式：\n"
+                '{"predicted_markup": 数值, "reasoning": "Markdown推理过程(200字内)"}\n\n'
+                "推理要点：\n"
+                "1) 考虑塞地贬值风险对回款的影响\n"
+                "2) 不同品类的加纳关税差异（摩配低、成品高）影响买方接受度\n"
+                "3) 首单薄利跑量 vs 品牌溢价之间的平衡\n"
+                "4) 加价率建议范围15-30%，不得低于总成本（ markup < 5%不现实）\n"
+                "5) 严格守住四条经营红线\n\n"
+                "只返回JSON，不要其他文字。"
+            )
+            raw = ai_chat([
+                {"role": "system", "content": BUSINESS_BRIEF},
+                {"role": "user", "content": prompt},
+            ])
+            # 尝试解析 JSON（AI可能包裹 markdown code block）
+            clean = raw.strip()
+            if clean.startswith("```"):
+                clean = re.sub(r"^```(?:json)?\s*", "", clean)
+                clean = re.sub(r"\s*```$", "", clean).strip()
+            pred = json.loads(clean)
+            predicted_markup = float(pred.get("predicted_markup", manual_markup))
+            reasoning = str(pred.get("reasoning", ""))
+            engine = AI_LAST_ENGINE or load_ai_config()["model"]
+        except Exception as e:
+            # 降级规则引擎
+            predicted_markup, reasoning = _rule_predict(
+                items, manual_markup, total_cost, usd_cny, ctx)
+            reasoning += f"\n\n> ⚠️ 大模型调用失败（{str(e)[:60]}），已降级为规则引擎预测。"
+            engine = "rule(降级)"
+    else:
+        predicted_markup, reasoning = _rule_predict(
+            items, manual_markup, total_cost, usd_cny, ctx)
+        engine = "rule"
+
+    # 基于预测加价率重算报价
+    pred_params = dict(params)
+    pred_params["markup"] = predicted_markup
+    pred_result = calc_profit(pred_params, usd_cny)
+    predicted_quote = pred_result["quote"]
+    predicted_profit = pred_result["profit"]
+    diff_pct = round((predicted_quote - manual_quote) / manual_quote * 100, 2) if manual_quote else 0
+
+    # 存入数据库
+    conn = get_db()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    conn.execute(
+        "INSERT INTO ai_predictions (quote_id, engine, predicted_markup, predicted_quote, "
+        "predicted_profit, manual_markup, manual_quote, diff_pct, reasoning, "
+        "items_json, context_json, created_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (None, engine, predicted_markup, predicted_quote, predicted_profit,
+         manual_markup, manual_quote, diff_pct, reasoning,
+         json.dumps(items, ensure_ascii=False),
+         json.dumps(context_block, ensure_ascii=False), now))
+    conn.commit(); conn.close()
+
+    return {
+        "engine": engine,
+        "predicted_markup": round(predicted_markup, 2),
+        "predicted_quote": round(predicted_quote, 2),
+        "predicted_profit": round(predicted_profit, 2),
+        "manual_markup": round(manual_markup, 2),
+        "manual_quote": round(manual_quote, 2),
+        "diff_pct": diff_pct,
+        "reasoning": reasoning,
+        "predicted_result": pred_result,
+    }
+
+
+def _rule_predict(items, manual_markup, total_cost, usd_cny, ctx):
+    """
+    规则引擎报价预测（无 AI Key 时降级）。
+    基于品类关税水平、塞地变动率、利润率区间综合建议加价率。
+    """
+    # 基准加价率：低关税品类可以低加价，高关税品类需要高加价
+    avg_cet = 0
+    n = 0
+    for it in items:
+        cat = CATEGORY_MAP.get(it.get("category", ""))
+        if cat:
+            avg_cet += cat["cet_duty"]
+            n += 1
+    avg_cet = avg_cet / n if n else 10
+
+    # 基准：CET 10% → markup 18%, CET 20% → markup 22%, CET 35% → markup 28%
+    base_markup = 15 + avg_cet * 0.4
+
+    # 塞地贬值偏快 → 适当提高加价率覆盖汇率风险
+    ghs_chg = ctx.get("ghs_change_pct") or 0
+    if ghs_chg > 2:
+        base_markup += 2     # 贬值快+2%
+    elif ghs_chg > 0:
+        base_markup += 1
+
+    # 约束范围 15-30%
+    predicted = max(15, min(30, round(base_markup, 1)))
+
+    reasoning = (
+        f"## 规则引擎预测\n\n"
+        f"- **品类分析**：平均CET关税 {avg_cet:.0f}%，"
+        f"{'低关税品类(摩配/汽配)可薄利跑量' if avg_cet <= 10 else '高关税品类需较高加价覆盖买方税负'}\n"
+        f"- **汇率影响**：近30天塞地{'贬值' if ghs_chg > 0 else '升值'} {abs(ghs_chg)}%，"
+        f"{'需提高加价率覆盖回款汇率风险' if ghs_chg > 2 else '汇率风险可控'}\n"
+        f"- **建议加价率**：{predicted}%（"
+        f"{'高于' if predicted > manual_markup else '低于' if predicted < manual_markup else '持平'}"
+        f"人工设定的{manual_markup}%）\n"
+        f"- **约束**：加价率区间 15-30%，不得低于总成本"
+    )
+    return predicted, reasoning
 # ==============================================================================
 # 七、Web 看板
 # ==============================================================================
@@ -1191,6 +1533,24 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 "SELECT * FROM goods ORDER BY id DESC")]
             conn.close()
             self._send(200, {"goods": rows})
+        elif self.path.startswith("/api/categories"):
+            # 品类主数据（8大品类×关税率/认证要求，来自《项目落地执行手册》§6.1）
+            self._send(200, {"categories": CATEGORIES})
+        elif self.path.startswith("/api/quotes"):
+            # 报价单列表
+            self._send(200, {"quotes": list_quotes()})
+        elif path.startswith("/api/quote/"):
+            # 加载单个报价单详情 /api/quote/{id}
+            try:
+                qid = int(path.split("/api/quote/")[1].split("/")[0])
+            except (ValueError, IndexError):
+                self._send(400, {"error": "invalid quote id"})
+                return
+            q = load_quote(qid)
+            if q:
+                self._send(200, q)
+            else:
+                self._send(404, {"error": "quote not found"})
         elif self.path.startswith("/api/parts"):
             # 配件报价列表：?keyword=xxx 可筛选；?confirmed=1 仅返回 AI 图像确认过的商品
             qs = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
@@ -1259,6 +1619,31 @@ class DashboardHandler(BaseHTTPRequestHandler):
             body = self._read_json()
             answer = ask_ai(body.get("question", ""))
             self._send(200, {"answer": answer})
+        elif self.path == "/api/goods":
+            # 保存商品到 goods 表：请求体 {name, sku, category, unit_price, ...}
+            body = self._read_json()
+            gid = save_goods(body)
+            self._send(200, {"id": gid, "ok": True})
+        elif self.path == "/api/quote/save":
+            # 保存报价单快照：请求体 {name, items, params, result, note}
+            body = self._read_json()
+            qid = save_quote(
+                body.get("name", f"报价单_{datetime.now().strftime('%m%d%H%M')}"),
+                body.get("items", []), body.get("params", {}),
+                body.get("result", {}), body.get("note", ""))
+            self._send(200, {"id": qid, "ok": True})
+        elif self.path == "/api/quote/ai-predict":
+            # AI 报价预测对比：请求体 {items, params, result}
+            body = self._read_json()
+            items = body.get("items", [])
+            params = body.get("params", {})
+            manual_result = body.get("result", {})
+            conn = get_db()
+            row = conn.execute("SELECT usd_cny FROM rates ORDER BY date DESC LIMIT 1").fetchone()
+            conn.close()
+            usd_cny = row["usd_cny"] if row else 7.2
+            prediction = ai_quote_predict(items, params, manual_result, usd_cny)
+            self._send(200, prediction)
         else:
             self._send(404, {"error": "not found"})
 
@@ -1301,6 +1686,7 @@ def build_summary():
     return {"latest_rate": latest, "rates": rates, "ghs_change_pct": ghs_change,
             "policies": policies, "fetch_log": log, "calc_defaults": CALC_DEFAULTS,
             "calc_default_item": CALC_DEFAULT_ITEM,
+            "categories": CATEGORIES,
             "ai_enabled": ai_enabled(),
             "last_report": dict(last_report) if last_report else None}
 

@@ -562,7 +562,7 @@
 
   /* ---------- 利润测算 ---------- */
   const CalculatorView = {
-    props: { defaults: Object, defaultItem: Object },
+    props: { defaults: Object, defaultItem: Object, categories: Array },
     data() {
       const df = this.defaults || {};
       return {
@@ -578,10 +578,25 @@
         importId: '',
         calcTimer: null,
         loading: false,
+        // 报价保存
+        saveDialogVisible: false,
+        quoteName: '',
+        quoteNote: '',
+        // AI 预测对比
+        aiPredicting: false,
+        aiPrediction: null,
+        // 报价历史
+        quotes: [],
+        showQuoteList: false,
       };
     },
     computed: {
       freightLabel() { return this.freightMode === 'auto' ? '海运物流费（按重量估算）' : '海运物流费（固定金额）'; },
+      catMap() {
+        const m = {};
+        (this.categories || []).forEach(c => { m[c.key] = c; });
+        return m;
+      },
       resultCards() {
         const c = this.result; if (!c) return [];
         const eq = Number(this.params.equity_a) || 51;
@@ -598,6 +613,10 @@
           ['两人分成 ' + eq + '/' + (100 - eq), fmtMoney(c.share_a) + ' / ' + fmtMoney(c.share_b)],
         ];
       },
+      aiDiffColor() {
+        if (!this.aiPrediction) return '';
+        return this.aiPrediction.diff_pct > 0 ? '#e53935' : '#43a047';
+      },
     },
     methods: {
       fmt, fmtMoney, fmtDouble,
@@ -608,6 +627,7 @@
           unit_price: item.unit_price ?? '',
           quantity: item.quantity ?? '',
           unit_weight: fmtDouble(item.unit_weight ?? ''),
+          category: item.category || '',
         });
         this.scheduleCalc();
       },
@@ -617,6 +637,12 @@
         this.scheduleCalc();
       },
       fmtWeight(row) { row.unit_weight = fmtDouble(row.unit_weight); },
+      catName(key) { return this.catMap[key]?.name || ''; },
+      catTariff(key) {
+        const c = this.catMap[key];
+        if (!c) return null;
+        return Math.round(c.cet_duty + 22.45);
+      },
       async loadGoods() {
         try {
           const d = await api('/api/goods');
@@ -626,7 +652,8 @@
       importGoods(id) {
         const g = this.goodsList.find(x => String(x.id) === String(id));
         if (!g) return;
-        this.addRow({ name: g.name, unit_price: g.unit_price, quantity: g.moq || 1, unit_weight: g.unit_weight });
+        this.addRow({ name: g.name, unit_price: g.unit_price, quantity: g.moq || 1,
+                      unit_weight: g.unit_weight, category: g.category });
         this.importId = '';
       },
       scheduleCalc() {
@@ -639,6 +666,7 @@
           unit_price: parseFloat(row.unit_price) || 0,
           quantity: parseFloat(row.quantity) || 0,
           unit_weight: parseFloat(row.unit_weight) || 0,
+          category: row.category || '',
         }));
         if (!items.length) return;
         this.loading = true;
@@ -650,11 +678,71 @@
         } catch (e) { ElMessage.error('测算失败: ' + e.message); }
         finally { this.loading = false; }
       },
+      // 保存报价单
+      openSaveDialog() {
+        if (!this.result) { ElMessage.warning('请先完成测算'); return; }
+        this.quoteName = '报价单_' + new Date().toLocaleDateString('zh-CN').replace(/\//g, '');
+        this.quoteNote = '';
+        this.saveDialogVisible = true;
+      },
+      async doSaveQuote() {
+        const items = this.items.map((row, i) => ({
+          name: (row.name || '').trim() || ('商品' + (i + 1)),
+          unit_price: parseFloat(row.unit_price) || 0,
+          quantity: parseFloat(row.quantity) || 0,
+          unit_weight: parseFloat(row.unit_weight) || 0,
+          category: row.category || '',
+        }));
+        try {
+          await api('/api/quote/save', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name: this.quoteName, items,
+              params: { freight_mode: this.freightMode, ...this.params },
+              result: this.result, note: this.quoteNote,
+            }),
+          });
+          ElMessage.success('报价单已保存：' + this.quoteName);
+          this.saveDialogVisible = false;
+          this.loadQuotes();
+        } catch (e) { ElMessage.error('保存失败: ' + e.message); }
+      },
+      // AI 预测对比
+      async doAiPredict() {
+        if (!this.result) { ElMessage.warning('请先完成测算'); return; }
+        this.aiPredicting = true;
+        this.aiPrediction = null;
+        try {
+          const items = this.items.map((row, i) => ({
+            name: (row.name || '').trim() || ('商品' + (i + 1)),
+            unit_price: parseFloat(row.unit_price) || 0,
+            quantity: parseFloat(row.quantity) || 0,
+            unit_weight: parseFloat(row.unit_weight) || 0,
+            category: row.category || '',
+          }));
+          this.aiPrediction = await api('/api/quote/ai-predict', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              items, params: { freight_mode: this.freightMode, ...this.params },
+              result: this.result,
+            }),
+          });
+        } catch (e) { ElMessage.error('AI预测失败: ' + e.message); }
+        finally { this.aiPredicting = false; }
+      },
+      // 报价历史
+      async loadQuotes() {
+        try {
+          const d = await api('/api/quotes');
+          this.quotes = d.quotes || [];
+        } catch (e) { console.error('quotes:', e); }
+      },
     },
     mounted() {
       const di = this.defaultItem || { name: '', unit_price: 0, quantity: 0, unit_weight: 0 };
       this.addRow(di);
       this.loadGoods();
+      this.loadQuotes();
       this.doCalc();
     },
     beforeUnmount() { clearTimeout(this.calcTimer); },
@@ -667,36 +755,45 @@
       <div class="section-head">
         <div class="kicker">Profit Calculator</div>
         <h2>多商品利润测算器</h2>
-        <div class="desc">可添加多种货物合并计价；海运物流费按商品单件重量自动估算；支持从本地商品库导入。</div>
+        <div class="desc">按品类分别计算加纳税负（摩配CET10% vs 成品CET20-35%）；支持保存报价、AI预测对比。</div>
       </div>
       <div class="panel">
         <h3 class="panel-title"><span class="iconfont icon-box-seam" style="color:#0071e3"></span>商品清单
           <span class="tip">（{{ items.length }} 种商品）</span></h3>
         <el-table :data="items" class="goods-table" style="width:100%">
-          <el-table-column label="商品名称" min-width="170">
+          <el-table-column label="商品名称" min-width="150">
             <template #default="{ row }">
               <el-input v-model="row.name" placeholder="如：摩托车链条" @input="scheduleCalc"></el-input>
             </template>
           </el-table-column>
-          <el-table-column label="采购单价（元/件）" min-width="130">
+          <el-table-column label="品类" min-width="140">
+            <template #default="{ row }">
+              <el-select v-model="row.category" placeholder="选择品类" clearable filterable
+                          style="width:100%" @change="scheduleCalc">
+                <el-option v-for="c in (categories||[])" :key="c.key" :value="c.key"
+                           :label="c.name + ' (CET ' + c.cet_duty + '%)'"></el-option>
+              </el-select>
+            </template>
+          </el-table-column>
+          <el-table-column label="采购单价（元/件）" min-width="120">
             <template #default="{ row }">
               <el-input-number v-model="row.unit_price" :controls="false" :min="0" :precision="2"
                                style="width:100%" @change="scheduleCalc"></el-input-number>
             </template>
           </el-table-column>
-          <el-table-column label="数量（件）" min-width="110">
+          <el-table-column label="数量（件）" min-width="100">
             <template #default="{ row }">
               <el-input-number v-model="row.quantity" :controls="false" :min="0" :precision="0"
                                style="width:100%" @change="scheduleCalc"></el-input-number>
             </template>
           </el-table-column>
-          <el-table-column label="单件重量（kg）" min-width="110">
+          <el-table-column label="单件重量（kg）" min-width="100">
             <template #default="{ row }">
               <el-input v-model="row.unit_weight" placeholder="如 1.0" @input="scheduleCalc"
                         @blur="fmtWeight(row)"></el-input>
             </template>
           </el-table-column>
-          <el-table-column label="小计（元）" min-width="100">
+          <el-table-column label="小计（元）" min-width="90">
             <template #default="{ row }">
               <span class="g-sub">{{ (parseFloat(row.unit_price) || 0) * (parseFloat(row.quantity) || 0) ? fmtMoney((parseFloat(row.unit_price) || 0) * (parseFloat(row.quantity) || 0)) : '—' }}</span>
             </template>
@@ -713,7 +810,7 @@
           <el-button @click="addRow()">
             <span class="iconfont icon-plus-lg" style="margin-right:6px"></span>添加商品
           </el-button>
-          <el-select v-model="importId" placeholder="从商品库导入…（数据库预留接口）" clearable filterable style="width:300px"
+          <el-select v-model="importId" placeholder="从商品库导入…" clearable filterable style="width:300px"
                      @change="importGoods">
             <el-option v-for="g in goodsList" :key="g.id" :value="g.id"
                        :label="g.name + '｜¥' + g.unit_price + '｜' + fmtDouble(g.unit_weight) + 'kg/件'"></el-option>
@@ -751,7 +848,7 @@
             <el-input-number v-model="params.markup" :controls="false" :min="0" style="width:100%"></el-input-number></div>
           <div><div class="label" style="font-size:12px;color:#86868b;margin-bottom:4px">定金比例（%）</div>
             <el-input-number v-model="params.deposit_ratio" :controls="false" :min="0" style="width:100%"></el-input-number></div>
-          <div><div class="label" style="font-size:12px;color:#86868b;margin-bottom:4px">加纳综合税负（%）</div>
+          <div><div class="label" style="font-size:12px;color:#86868b;margin-bottom:4px">加纳综合税负（%，未选品类时用）</div>
             <el-input-number v-model="params.ghana_tax" :controls="false" :min="0" style="width:100%"></el-input-number></div>
           <div><div class="label" style="font-size:12px;color:#86868b;margin-bottom:4px">重庆合伙人股比（%）</div>
             <el-input-number v-model="params.equity_a" :controls="false" :min="0" :max="100" style="width:100%"></el-input-number></div>
@@ -760,17 +857,31 @@
       <div class="panel" v-loading="loading">
         <h3 class="panel-title"><span class="iconfont icon-currency-exchange" style="color:#0071e3"></span>测算结果</h3>
         <template v-if="result">
-          <div class="calc-sub">商品明细</div>
+          <div class="calc-sub">商品明细（含分品类税负）</div>
           <el-table :data="result.items" size="small" style="width:100%;margin-bottom:8px">
-            <el-table-column prop="name" label="商品" min-width="140"></el-table-column>
-            <el-table-column label="数量 × 单价" min-width="140">
+            <el-table-column prop="name" label="商品" min-width="120"></el-table-column>
+            <el-table-column label="品类" min-width="100">
+              <template #default="{ row }">
+                <span v-if="row.category_name">{{ row.category_name }}</span>
+                <span v-else style="color:#86868b">未分类</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="数量 × 单价" min-width="130">
               <template #default="{ row }">{{ fmt(row.quantity) }} 件 × ¥{{ row.unit_price }}</template>
             </el-table-column>
-            <el-table-column label="采购小计" min-width="110">
+            <el-table-column label="采购小计" min-width="100">
               <template #default="{ row }">¥{{ fmt(row.purchase) }}</template>
             </el-table-column>
-            <el-table-column label="重量" min-width="90">
+            <el-table-column label="重量" min-width="80">
               <template #default="{ row }">{{ fmt(row.weight) }} kg</template>
+            </el-table-column>
+            <el-table-column label="加纳税率" min-width="80">
+              <template #default="{ row }">
+                <span style="font-weight:600;color:#e53935">{{ row.ghana_tax_pct }}%</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="到岸成本" min-width="90">
+              <template #default="{ row }">{{ fmtDollar(row.item_landed_usd) }}</template>
             </el-table-column>
           </el-table>
           <div class="result-cards">
@@ -782,6 +893,83 @@
         </template>
         <div v-else style="color:#86868b;padding:18px 0;text-align:center">正在计算…</div>
       </div>
+      <div class="panel">
+        <h3 class="panel-title">
+          <span class="iconfont icon-robot" style="color:#0071e3"></span>报价操作：保存 / AI预测对比
+        </h3>
+        <div class="toolbar" style="margin-bottom:14px">
+          <el-button type="primary" @click="openSaveDialog" :disabled="!result">
+            <span class="iconfont icon-floppy-disk" style="margin-right:6px"></span>保存报价单
+          </el-button>
+          <el-button @click="doAiPredict" :loading="aiPredicting" :disabled="!result">
+            <span class="iconfont icon-graph-up" style="margin-right:6px"></span>AI预测对比
+          </el-button>
+          <el-button text @click="showQuoteList = !showQuoteList">
+            {{ showQuoteList ? '收起' : '查看' }}报价历史（{{ quotes.length }}）
+          </el-button>
+        </div>
+        <!-- AI 预测对比面板 -->
+        <div v-if="aiPrediction" class="ai-compare-panel">
+          <div class="calc-sub" style="margin-bottom:10px">
+            <span class="iconfont icon-graph-up" style="color:#0071e3;margin-right:4px"></span>
+            AI vs 人工报价对比
+            <span class="tag" style="background:#eef2ff;color:#0071e3;margin-left:8px">{{ aiPrediction.engine }}</span>
+          </div>
+          <div class="compare-grid">
+            <div class="compare-col">
+              <div class="compare-header" style="color:#1d1d1f">人工报价</div>
+              <div class="compare-row"><span>加价率</span><b>{{ aiPrediction.manual_markup }}%</b></div>
+              <div class="compare-row"><span>报价</span><b>{{ fmtMoney(aiPrediction.manual_quote) }}</b></div>
+              <div class="compare-row"><span>毛利</span><b>{{ fmtMoney(aiPrediction.predicted_profit ? aiPrediction.manual_quote - result.total_cost : 0) }}</b></div>
+            </div>
+            <div class="compare-col" style="border-left:2px solid #e53935">
+              <div class="compare-header" :style="{color: aiDiffColor}">AI建议</div>
+              <div class="compare-row"><span>加价率</span><b :style="{color: aiDiffColor}">{{ aiPrediction.predicted_markup }}%</b></div>
+              <div class="compare-row"><span>报价</span><b :style="{color: aiDiffColor}">{{ fmtMoney(aiPrediction.predicted_quote) }}</b></div>
+              <div class="compare-row"><span>毛利</span><b>{{ fmtMoney(aiPrediction.predicted_profit) }}</b></div>
+            </div>
+          </div>
+          <div class="compare-diff" v-if="aiPrediction.diff_pct !== 0">
+            报价差异：<b :style="{color: aiDiffColor}">{{ aiPrediction.diff_pct > 0 ? '+' : '' }}{{ aiPrediction.diff_pct }}%</b>
+            <span v-if="aiPrediction.diff_pct > 0">（AI建议更高报价）</span>
+            <span v-else>（AI建议更低报价）</span>
+          </div>
+          <div v-else class="compare-diff" style="color:#86868b">AI与人工报价一致</div>
+          <div class="compare-reasoning" v-html="md2html(aiPrediction.reasoning)"></div>
+        </div>
+        <!-- 报价历史列表 -->
+        <div v-if="showQuoteList && quotes.length" style="margin-top:16px">
+          <div class="calc-sub">已保存报价单</div>
+          <el-table :data="quotes" size="small" style="width:100%">
+            <el-table-column prop="name" label="名称" min-width="120"></el-table-column>
+            <el-table-column label="报价" min-width="90">
+              <template #default="{ row }">{{ fmtMoney(row.quote) }}</template>
+            </el-table-column>
+            <el-table-column label="毛利" min-width="90">
+              <template #default="{ row }">{{ fmtMoney(row.profit) }}</template>
+            </el-table-column>
+            <el-table-column label="毛利率" min-width="70">
+              <template #default="{ row }">{{ row.margin_pct }}%</template>
+            </el-table-column>
+            <el-table-column prop="created_at" label="时间" min-width="120"></el-table-column>
+          </el-table>
+        </div>
+      </div>
+      <!-- 保存报价单对话框 -->
+      <el-dialog v-model="saveDialogVisible" title="保存报价单" width="460px">
+        <div style="margin-bottom:14px">
+          <div class="label" style="font-size:12px;color:#86868b;margin-bottom:4px">报价单名称</div>
+          <el-input v-model="quoteName" placeholder="如：首单摩配5SKU"></el-input>
+        </div>
+        <div>
+          <div class="label" style="font-size:12px;color:#86868b;margin-bottom:4px">备注</div>
+          <el-input v-model="quoteNote" type="textarea" :rows="2" placeholder="可选"></el-input>
+        </div>
+        <template #footer>
+          <el-button @click="saveDialogVisible = false">取消</el-button>
+          <el-button type="primary" @click="doSaveQuote">保存</el-button>
+        </template>
+      </el-dialog>
     </div>`,
   };
 
@@ -794,7 +982,7 @@
       return {
         activeView: 'overview',
         summary: { latest_rate: null, rates: [], ghs_change_pct: null, policies: [], fetch_log: [],
-                   calc_defaults: {}, calc_default_item: {}, ai_enabled: false, last_report: null },
+                   calc_defaults: {}, calc_default_item: {}, categories: [], ai_enabled: false, last_report: null },
         loading: true,
         error: '',
       };
@@ -859,7 +1047,7 @@
           <PoliciesView v-else-if="activeView === 'policies'" :policies="summary.policies" />
           <PartsView v-else-if="activeView === 'parts'" />
           <AiReportView v-else-if="activeView === 'ai'" :last-report="summary.last_report" :ai-enabled="summary.ai_enabled" />
-          <CalculatorView v-else :defaults="summary.calc_defaults" :default-item="summary.calc_default_item" />
+          <CalculatorView v-else :defaults="summary.calc_defaults" :default-item="summary.calc_default_item" :categories="summary.categories" />
         </el-main>
       </el-container>
     </el-container>`,
