@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- China red rounded background (中) -->
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#de2910"/>
+      <stop offset="100%" stop-color="#a11421"/>
+    </linearGradient>
+    <linearGradient id="seaGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1a8a5c"/>
+      <stop offset="100%" stop-color="#006b3f"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="13" ry="13" fill="url(#bgGrad)"/>
+
+  <!-- Gold star at top (China 5-star + Ghana 1-star motif) -->
+  <circle cx="32" cy="13" r="3.6" fill="#ffcd00"/>
+  <circle cx="32" cy="13" r="3.6" fill="none" stroke="#b8860b" stroke-width="0.4"/>
+  <!-- Small flanking stars (China 大五角星 + 四小星) -->
+  <circle cx="22" cy="11" r="1.1" fill="#ffcd00"/>
+  <circle cx="42" cy="11" r="1.1" fill="#ffcd00"/>
+  <circle cx="22" cy="16" r="1.1" fill="#ffcd00"/>
+  <circle cx="42" cy="16" r="1.1" fill="#ffcd00"/>
+
+  <!-- Container ship hull (white) -->
+  <path d="M 11 39 L 53 39 L 49 47 L 15 47 Z" fill="#ffffff"/>
+  <!-- Hull gold waterline accent -->
+  <rect x="11" y="44" width="42" height="1.4" fill="#ffcd00"/>
+
+  <!-- Containers stack -->
+  <!-- Top-left China-red container -->
+  <rect x="14" y="26" width="15" height="13" fill="#c8102e" rx="0.6"/>
+  <!-- Top-right gold container -->
+  <rect x="29" y="26" width="21" height="13" fill="#ffcd00" rx="0.6"/>
+  <!-- Bottom-row white container spanning -->
+  <rect x="14" y="33" width="36" height="6" fill="#fafafa" rx="0.6"/>
+  <!-- Container ridge lines (white on red, dark on white, accent on gold) -->
+  <line x1="20" y1="27" x2="20" y2="38" stroke="#ffcd00" stroke-width="0.5" opacity="0.8"/>
+  <line x1="26" y1="27" x2="26" y2="38" stroke="#ffcd00" stroke-width="0.5" opacity="0.8"/>
+  <line x1="34" y1="27" x2="34" y2="38" stroke="#c8102e" stroke-width="0.5" opacity="0.7"/>
+  <line x1="40" y1="27" x2="40" y2="38" stroke="#c8102e" stroke-width="0.5" opacity="0.7"/>
+  <line x1="46" y1="27" x2="46" y2="38" stroke="#c8102e" stroke-width="0.5" opacity="0.7"/>
+  <!-- Horizontal divider between container rows -->
+  <line x1="14" y1="33" x2="50" y2="33" stroke="#1a3a5c" stroke-width="0.6" opacity="0.4"/>
+
+  <!-- Crane arm (left) -->
+  <line x1="17" y1="26" x2="17" y2="20" stroke="#ffffff" stroke-width="1.4" stroke-linecap="round"/>
+  <line x1="13" y1="20" x2="21" y2="20" stroke="#ffffff" stroke-width="1.4" stroke-linecap="round"/>
+  <!-- Crane arm (right) -->
+  <line x1="46" y1="26" x2="46" y2="20" stroke="#ffffff" stroke-width="1.4" stroke-linecap="round"/>
+  <line x1="42" y1="20" x2="50" y2="20" stroke="#ffffff" stroke-width="1.4" stroke-linecap="round"/>
+
+  <!-- Ocean waves (Ghana green) -->
+  <path d="M 0 47 Q 8 44 16 47 T 32 47 T 48 47 T 64 47 L 64 64 L 0 64 Z" fill="url(#seaGrad)"/>
+  <!-- Wave highlight (gold) -->
+  <path d="M 0 49 Q 8 46.5 16 49 T 32 49 T 48 49 T 64 49" fill="none" stroke="#ffcd00" stroke-width="0.6" opacity="0.7"/>
+  <path d="M 0 55 Q 8 52.5 16 55 T 32 55 T 48 55 T 64 55" fill="none" stroke="#ffcd00" stroke-width="0.4" opacity="0.4"/>
+</svg>
