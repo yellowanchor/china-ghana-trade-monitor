@@ -375,4 +375,66 @@ html, body {
   .topbar .rate-status { display: none; }
   .content { padding: 16px 14px 32px; }
   .sidebar { width: 200px !important; }
+  .kb-grid { grid-template-columns: 1fr !important; }
+  .ov-grid { grid-template-columns: 1fr !important; }
 }
+
+/* ===== AI 引擎徽标（标题行右侧）===== */
+.engine-badge {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 9px;
+  border-radius: 6px;
+  background: #eef2ff;
+  color: var(--accent);
+  white-space: nowrap;
+}
+.engine-badge.rule { background: #f5f5f5; color: var(--text-3); }
+
+/* ===== 概览：AI 日报内容区（撑满模块，超出滚动）===== */
+.ov-report {
+  max-height: 380px;
+  overflow-y: auto;
+  padding-right: 6px;
+  line-height: 1.75;
+}
+.ov-report h3 { font-size: 14px; margin: 10px 0 4px; }
+.ov-report p { margin: 5px 0; }
+.ov-report ul { margin: 5px 0; padding-left: 18px; }
+.ov-report li { margin: 2px 0; line-height: 1.7; }
+.ov-report blockquote { margin: 6px 0; }
+
+/* ===== 概览：基础知识文档 ===== */
+.kb-panel { padding: 18px 22px; }
+.kb-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 24px;
+}
+.kb-section h4 {
+  font-size: 14px;
+  font-weight: 700;
+  margin: 0 0 12px;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 7px;
+}
+.kb-section h4 .iconfont { font-size: 15px; color: var(--accent); }
+.kb-section dl { margin: 0; }
+.kb-section dt {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+  margin-top: 10px;
+}
+.kb-section dt:first-child { margin-top: 0; }
+.kb-section dd {
+  font-size: 13px;
+  color: var(--text-2);
+  line-height: 1.7;
+  margin: 3px 0 0;
+}
+.kb-section dd b { color: var(--red); }

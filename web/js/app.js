@@ -77,14 +77,14 @@
         ];
       },
       topPolicies() { return (this.summary.policies || []).slice(0, 8); },
-      reportBrief() {
+      reportHtml() {
         const lr = this.summary.last_report;
-        if (!lr) return '';
-        const txt = String(lr.content || '').replace(/[#*>`]/g, '').replace(/\n+/g, ' ');
-        return txt.length > 220 ? txt.slice(0, 220) + '…' : txt;
+        if (!lr || !lr.content) return '';
+        return md2html(lr.content);
       },
     },
     methods: {
+      md2html,
       async runFetch() {
         this.fetching = true; this.msg = '采集中，请稍候…';
         try {
@@ -135,15 +135,68 @@
           </div>
           <div v-else style="color:#86868b;padding:12px 0">暂无政策数据，请点击「立即采集一次」</div>
         </div>
-        <div class="panel">
-          <h3 class="panel-title"><span class="iconfont icon-robot" style="color:#0071e3"></span>AI 分析日报
-            <span class="tip">{{ summary.last_report ? summary.last_report.ts : '暂无' }}</span></h3>
-          <div v-if="reportBrief" class="md" style="color:#424245;line-height:1.8">{{ reportBrief }}</div>
+        <div class="panel ov-ai-panel">
+          <h3 class="panel-title"><span class="iconfont icon-magic" style="color:#0071e3"></span>AI 分析日报
+            <span class="tip">{{ summary.last_report ? summary.last_report.ts : '暂无' }}</span>
+            <span v-if="summary.last_report && summary.last_report.engine" class="engine-badge" :title="'AI 引擎：' + summary.last_report.engine">{{ summary.last_report.engine }}</span>
+            <span v-else-if="!summary.ai_enabled" class="engine-badge rule" title="未配置 API Key，当前为规则引擎模式">规则引擎</span>
+          </h3>
+          <div v-if="reportHtml" class="md ov-report" style="color:#424245" v-html="reportHtml"></div>
           <div v-else style="color:#86868b;padding:12px 0">
             {{ summary.ai_enabled ? '尚未生成日报，可进入「AI 日报」生成。' : '未配置 API Key，当前为规则引擎模式。' }}
           </div>
-          <div v-if="summary.last_report" style="margin-top:10px;font-size:12px;color:#86868b">
-            引擎: {{ summary.last_report.engine }}<span v-if="!summary.ai_enabled">（未配置API Key，规则引擎模式）</span>
+        </div>
+      </div>
+      <div class="panel kb-panel">
+        <h3 class="panel-title"><span class="iconfont icon-book" style="color:#0071e3"></span>基础知识文档
+          <span class="tip">外贸术语 / 认证 / 经营规则</span></h3>
+        <div class="kb-grid">
+          <div class="kb-section">
+            <h4><span class="iconfont icon-truck" style="margin-right:4px"></span>单位与术语</h4>
+            <dl>
+              <dt>海运 / 票</dt>
+              <dd>一票 = 一个提单（B/L）对应的一批货物。不同票需分别报关、分别计费。海运费按票收取基础费 + 重量/体积附加。</dd>
+              <dt>TEU / 柜</dt>
+              <dd>TEU = Twenty-foot Equivalent Unit（20 英尺标准集装箱）。1 个 20 尺柜 = 1 TEU，1 个 40 尺柜 = 2 TEU。整柜走海运，散货走拼箱（LCL）。</dd>
+              <dt>CBM</dt>
+              <dd>Cubic Meter（立方米），海运散货体积计量单位。1 CBM 海运限重约 1 吨（重货）或 363 kg（泡货）。</dd>
+              <dt>MOQ</dt>
+              <dd>Minimum Order Quantity（最低起订量），供应商要求的最小采购数量。</dd>
+              <dt>EXW / FOB / CIF</dt>
+              <dd>贸易术语：EXW 工厂交货（买方全责），FOB 船上交货（离港后买方负责运费保险），CIF 成本+保险+运费（卖方负责到目的港）。</dd>
+            </dl>
+          </div>
+          <div class="kb-section">
+            <h4><span class="iconfont icon-shield-check" style="margin-right:4px"></span>认证与合规</h4>
+            <dl>
+              <dt>COC</dt>
+              <dd>Certificate of Conformity（符合性证书），加纳进口强制认证，证明产品符合加纳标准。无 COC 货物将被海关扣留。</dd>
+              <dt>SONCAP</dt>
+              <dd>Standards Organization of Nigeria Conformity Assessment Programme，尼日利亚符合性评定，流程类似 COC。</dd>
+              <dt>CE / FCC</dt>
+              <dd>CE = 欧盟产品安全认证标志；FCC = 美国联邦通信委员会认证（电子产品）。出口目的地不同要求不同。</dd>
+              <dt>ETC</dt>
+              <dd>出口退税登记证，中国出口企业办理退税时需提供的资质证明。</dd>
+              <dt>B/L</dt>
+              <dd>Bill of Lading（提单），承运人签发的货物收据 + 物权凭证 + 运输合同证明。</dd>
+            </dl>
+          </div>
+          <div class="kb-section">
+            <h4><span class="iconfont icon-cash-coin" style="margin-right:4px"></span>条款与经营规则</h4>
+            <dl>
+              <dt>先收定金再采购</dt>
+              <dd><b>经营红线</b>：收到客户定金后才能向供应商下单，降低库存与资金风险。定金未到账不得排产发货。</dd>
+              <dt>定金比例</dt>
+              <dd>默认 30%，覆盖采购成本。尾款在发货前或到港后结清。</dd>
+              <dt>付款方式</dt>
+              <dd>T/T（电汇）为主，L/C（信用证）为大额备选。预付 T/T 30% + 发货前 T/T 70% 为常见组合。</dd>
+              <dt>加纳综合税负</dt>
+              <dd>含进口关税 + CET（共同对外关税）+ VAT（14.5%）+ NHIL（2.5%）+ GETFL（2.5%）等。摩配约 32.45%，成品约 57.45%。</dd>
+              <dt>股比分配</dt>
+              <dd>重庆方 51% / 加纳方 49%（合伙人协议约定），利润按此比例分成。</dd>
+              <dt>报价公式</dt>
+              <dd>总成本 ×（1 + 加价率）= 报价。默认加价率 21%，可根据品类竞争情况浮动。</dd>
+            </dl>
           </div>
         </div>
       </div>
@@ -1045,7 +1098,7 @@
     <el-container class="app-shell">
       <el-header class="topbar" height="52px">
         <div class="brand">
-          <span class="logo"><span class="iconfont icon-graph-up"></span></span>
+          <span class="logo"><span class="iconfont icon-globe2"></span></span>
           <span>中加贸易智能分析</span>
         </div>
         <div class="top-right">
@@ -1058,12 +1111,12 @@
       <el-container class="body">
         <el-aside class="sidebar" width="224px">
           <el-menu :default-active="activeView" class="side-menu" @select="onSelect">
-            <el-menu-item index="overview"><span class="iconfont icon-speedometer2 menu-ico"></span>概览</el-menu-item>
-            <el-menu-item index="rates"><span class="iconfont icon-graph-up menu-ico"></span>汇率趋势</el-menu-item>
-            <el-menu-item index="policies"><span class="iconfont icon-newspaper menu-ico"></span>政策监控</el-menu-item>
-            <el-menu-item index="parts"><span class="iconfont icon-tools menu-ico"></span>配件报价</el-menu-item>
-            <el-menu-item index="ai"><span class="iconfont icon-robot menu-ico"></span>AI 日报</el-menu-item>
-            <el-menu-item index="calculator"><span class="iconfont icon-calculator menu-ico"></span>利润测算</el-menu-item>
+            <el-menu-item index="overview"><span class="iconfont icon-grid-3x3-gap menu-ico"></span>概览</el-menu-item>
+            <el-menu-item index="rates"><span class="iconfont icon-graph-up-arrow menu-ico"></span>汇率趋势</el-menu-item>
+            <el-menu-item index="policies"><span class="iconfont icon-journal-text menu-ico"></span>政策监控</el-menu-item>
+            <el-menu-item index="parts"><span class="iconfont icon-box-seam menu-ico"></span>配件报价</el-menu-item>
+            <el-menu-item index="ai"><span class="iconfont icon-magic menu-ico"></span>AI 日报</el-menu-item>
+            <el-menu-item index="calculator"><span class="iconfont icon-cash-coin menu-ico"></span>利润测算</el-menu-item>
           </el-menu>
           <div class="sidebar-foot">
             <div><span class="iconfont icon-database" style="margin-right:4px"></span>数据：汇率 / 政策 / 配件 / 商品库</div>
