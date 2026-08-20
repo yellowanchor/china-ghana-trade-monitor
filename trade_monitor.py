@@ -93,15 +93,24 @@ def is_noise(title):
 
 # 利润测算默认参数（取自方案书表6：首单摩配拼柜模型）
 CALC_DEFAULTS = {
-    "unit_price": 29.0,      # 采购单价（元/件）
-    "quantity": 2000,        # 数量（件）
-    "freight": 9500,         # 国内物流 + LCL 拼柜海运费（元）
-    "agent_fee": 1500,       # 报关/外贸代理/单证费（元）
-    "misc_fee": 2000,        # 寄样 + 验货 + 杂费（元）
-    "markup": 21,            # 加价率（%，按总成本加成）
-    "deposit_ratio": 30,     # 加纳方定金比例（%，必须先收定金再采购）
-    "ghana_tax": 35,         # 加纳端综合税负（%，ECOWAS CET + VAT15% + NHIL/GETFund 各2.5%）
-    "equity_a": 51,          # 重庆合伙人股比（%）
+    "freight_mode": "auto",      # 海运物流费模式：auto 按总重量自动估算 / fixed 固定金额
+    "freight_base": 3000,        # auto 模式：基础费（起运港杂+订舱+内装，元）
+    "freight_per_kg": 3.25,      # auto 模式：每公斤 LCL 拼柜海运费（元/kg）
+    "freight": 9500,             # fixed 模式：国内物流 + LCL 拼柜海运费总额（元）
+    "agent_fee": 1500,           # 报关/外贸代理/单证费（元）
+    "misc_fee": 2000,            # 寄样 + 验货 + 杂费（元）
+    "markup": 21,                # 加价率（%，按总成本加成）
+    "deposit_ratio": 30,         # 加纳方定金比例（%，必须先收定金再采购）
+    "ghana_tax": 35,             # 加纳端综合税负（%，ECOWAS CET + VAT15% + NHIL/GETFund 各2.5%）
+    "equity_a": 51,              # 重庆合伙人股比（%）
+}
+
+# 默认商品清单首行（示例：摩托车链条 2000 件 × 1kg/件）
+CALC_DEFAULT_ITEM = {
+    "name": "摩托车链条",         # 商品名称
+    "unit_price": 29.0,          # 采购单价（元/件）
+    "quantity": 2000,            # 数量（件）
+    "unit_weight": 1.0,          # 单件重量（kg/件）
 }
 
 # ---------------------------- AI 智能分析配置 ----------------------------------
@@ -200,6 +209,18 @@ def get_db():
             first_seen TEXT                         -- 首次抓到时间
         );
         CREATE UNIQUE INDEX IF NOT EXISTS idx_part ON parts_quotes(keyword, title, supplier);
+        CREATE TABLE IF NOT EXISTS goods (          -- 本地商品主数据（供测算器/报价单引用）
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT NOT NULL,              -- 商品名称
+            sku         TEXT DEFAULT '',            -- SKU 编码（对齐《数据查询手册》主数据表）
+            category    TEXT DEFAULT '',            -- 分类（摩配/汽配/日用品…）
+            unit_price  REAL DEFAULT 0,             -- 采购单价（元/件）
+            unit_weight REAL DEFAULT 0,             -- 单件重量（kg/件）
+            moq         INTEGER DEFAULT 1,          -- 最小起订量（件）
+            source      TEXT DEFAULT 'manual',      -- 来源：manual人工 / ai文档识别 / photo照片识别 / auto抓取
+            note        TEXT DEFAULT '',            -- 备注
+            created_at  TEXT                        -- 录入时间
+        );
     """)
     # 字段迁移：商品展示图、AI 图像校验结果（兼容旧库）
     for col_sql in (
@@ -621,19 +642,77 @@ def fetch_parts(keywords=None, save_top=30):
 
 def calc_profit(p=CALC_DEFAULTS, usd_cny=7.2):
     """
-    利润测算：输入采购与费用参数，输出报价/毛利/税负全套结果。
-    模型：总成本 = 采购成本 + 海运物流 + 代理费 + 杂费
+    利润测算（多商品合并版）：输入商品清单与费用参数，输出报价/毛利/税负全套结果。
+
+    参数结构（兼容两种格式）：
+      多商品（推荐）:
+        {"items": [{"name","unit_price","quantity","unit_weight"}, ...],
+         "freight_mode": "auto"|"fixed",
+         "freight_base": 基础费(元), "freight_per_kg": 每公斤运费(元/kg),   # auto 用
+         "freight": 固定海运物流费(元),                                     # fixed 用
+         "agent_fee","misc_fee","markup","deposit_ratio","ghana_tax","equity_a"}
+      单商品（旧格式兼容）:
+        {"unit_price","quantity","freight", ...}
+
+    模型：总成本 = Σ商品采购成本 + 海运物流费 + 代理费 + 杂费
           报价   = 总成本 × (1 + 加价率)
           毛利   = 报价 − 总成本
+    海运物流费：auto 模式 = 基础费 + 每公斤运费 × Σ(单件重量×数量)；fixed 模式直接用固定金额。
     """
-    purchase = p["unit_price"] * p["quantity"]          # 采购成本
-    total_cost = purchase + p["freight"] + p["agent_fee"] + p["misc_fee"]
-    quote = total_cost * (1 + p["markup"] / 100)        # 对加纳方报价（元）
-    profit = quote - total_cost                         # 毛利（元）
-    quote_usd = quote / usd_cny                         # 报价折美元
-    deposit = quote * p["deposit_ratio"] / 100          # 定金（先收再采购）
-    ghana_landed = quote_usd * (1 + p["ghana_tax"] / 100)  # 加纳端含税到岸成本（美元）
+    # —— 商品清单：多商品 items > 旧格式单商品 > 默认示例 ——
+    items = p.get("items") if isinstance(p.get("items"), list) and p.get("items") else None
+    if items is None:
+        if p.get("unit_price") is not None and p.get("quantity") is not None:
+            items = [{"name": "商品1", "unit_price": p.get("unit_price", 0),
+                      "quantity": p.get("quantity", 0), "unit_weight": p.get("unit_weight", 0) or 0}]
+        else:
+            items = [dict(CALC_DEFAULT_ITEM)]
+
+    detail = []
+    total_weight = 0.0
+    purchase = 0.0
+    for it in items:
+        up = float(it.get("unit_price") or 0)
+        qty = float(it.get("quantity") or 0)
+        uw = float(it.get("unit_weight") or 0)
+        buy = up * qty                       # 该商品采购成本
+        w = uw * qty                         # 该商品总重量（kg）
+        total_weight += w
+        purchase += buy
+        detail.append({
+            "name": str(it.get("name") or f"商品{len(detail)+1}"),
+            "unit_price": round(up, 2),
+            "quantity": qty,
+            "unit_weight": round(uw, 3),
+            "purchase": round(buy, 2),
+            "weight": round(w, 2),
+        })
+
+    # —— 海运物流费：auto 按总重量估算 / fixed 固定金额 ——
+    mode = p.get("freight_mode") or ("fixed" if p.get("unit_price") is not None
+                                     else CALC_DEFAULTS["freight_mode"])
+    if mode == "auto":
+        fbase = float(p.get("freight_base") or CALC_DEFAULTS["freight_base"])
+        fpkg = float(p.get("freight_per_kg") or CALC_DEFAULTS["freight_per_kg"])
+        freight = fbase + fpkg * total_weight
+    else:
+        fbase, fpkg = 0.0, 0.0
+        freight = float(p.get("freight") or CALC_DEFAULTS["freight"])
+
+    total_cost = purchase + freight + float(p.get("agent_fee") or 0) + float(p.get("misc_fee") or 0)
+    quote = total_cost * (1 + float(p.get("markup") or 0) / 100)        # 对加纳方报价（元）
+    profit = quote - total_cost                                         # 毛利（元）
+    quote_usd = quote / usd_cny                                         # 报价折美元
+    deposit = quote * float(p.get("deposit_ratio") or 0) / 100          # 定金（先收再采购）
+    ghana_landed = quote_usd * (1 + float(p.get("ghana_tax") or 0) / 100)  # 加纳端含税到岸成本（美元）
     return {
+        "items": detail,
+        "count": len(detail),
+        "total_weight": round(total_weight, 2),
+        "freight_mode": mode,
+        "freight": round(freight, 2),
+        "freight_base": round(fbase, 2),
+        "freight_per_kg": round(fpkg, 4),
         "purchase": round(purchase, 2),
         "total_cost": round(total_cost, 2),
         "quote": round(quote, 2),
@@ -642,8 +721,8 @@ def calc_profit(p=CALC_DEFAULTS, usd_cny=7.2):
         "margin_pct": round(profit / quote * 100, 2) if quote else 0,
         "deposit": round(deposit, 2),
         "ghana_landed_usd": round(ghana_landed, 2),
-        "share_a": round(profit * p["equity_a"] / 100, 2),        # 重庆合伙人分成
-        "share_b": round(profit * (100 - p["equity_a"]) / 100, 2) # 深圳合伙人分成
+        "share_a": round(profit * float(p.get("equity_a") or 0) / 100, 2),         # 重庆合伙人分成
+        "share_b": round(profit * (100 - float(p.get("equity_a") or 0)) / 100, 2)  # 深圳合伙人分成
     }
 
 
@@ -881,33 +960,29 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     background: #f5f5f7; color: #1d1d1f; font-size: 15px;
     -webkit-font-smoothing: antialiased;
   }
-  /* —— 吸顶导航（毛玻璃，仿 apple.com）—— */
+  /* —— 顶栏（后台控制台风格：全宽毛玻璃，左品牌 / 右侧信息）—— */
   nav {
     position: sticky; top: 0; z-index: 100;
-    background: rgba(251, 251, 253, 0.82);
+    background: rgba(251, 251, 253, 0.85);
     -webkit-backdrop-filter: saturate(180%) blur(20px);
     backdrop-filter: saturate(180%) blur(20px);
     border-bottom: 0.5px solid rgba(0, 0, 0, 0.1);
   }
   nav .nav-inner {
-    max-width: 1024px; margin: 0 auto; padding: 0 22px;
-    height: 48px; display: flex; align-items: center; justify-content: space-between;
+    height: 52px; padding: 0 24px;
+    display: flex; align-items: center; justify-content: space-between;
   }
-  nav .brand { font-weight: 600; font-size: 15px; letter-spacing: -0.01em; }
-  nav .links { display: flex; gap: 26px; }
-  nav a { color: #424245; text-decoration: none; font-size: 12px; }
-  nav a:hover { color: #000; }
-  /* —— 首屏大标题 —— */
-  .hero { text-align: center; padding: 72px 22px 12px; }
-  .hero .eyebrow { color: #86868b; font-size: 19px; font-weight: 600; margin-bottom: 6px; }
-  .hero h1 {
-    font-size: 48px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.1;
-    background: linear-gradient(94deg, #1d1d1f 30%, #6e6e73);
-    -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+  nav .brand { display: flex; align-items: center; gap: 10px;
+               font-weight: 700; font-size: 15.5px; letter-spacing: -0.01em; }
+  nav .brand .logo {
+    width: 28px; height: 28px; border-radius: 8px;
+    background: linear-gradient(135deg, #0071e3, #42a5ff);
+    color: #fff; display: inline-flex; align-items: center; justify-content: center;
+    font-size: 14px;
   }
-  .hero .sub { color: #6e6e73; font-size: 17px; margin-top: 12px; }
-  /* —— 居中限宽容器（不占满整屏）—— */
-  .container { max-width: 1024px; margin: 0 auto; padding: 12px 22px 40px; }
+  nav .top-info { display: flex; align-items: center; gap: 14px; color: #86868b; font-size: 12.5px; }
+  nav .top-info .dot { width: 7px; height: 7px; border-radius: 50%; background: #34c759;
+                       display: inline-block; margin-right: 6px; }
   /* —— 章节标题（仿苹果分区标题）—— */
   .section-head { padding: 44px 4px 18px; }
   .section-head .kicker { color: #86868b; font-size: 12px; font-weight: 600;
@@ -932,6 +1007,20 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04); border: 0.5px solid rgba(0, 0, 0, 0.05);
     margin-bottom: 14px;
   }
+  /* —— 测算器小节标题 —— */
+  .calc-sub { font-size: 15px; font-weight: 600; color: #1d1d1f; margin: 20px 0 10px; }
+  .calc-sub:first-child { margin-top: 0; }
+  .calc-tip { font-size: 12px; color: #86868b; font-weight: 400; margin-left: 8px; }
+  #calcGoodsTable input {
+    width: 92%; padding: 7px 9px; border: 0.5px solid #d2d2d7; border-radius: 8px;
+    font-size: 13.5px; background: #fff; outline: none;
+    transition: border 0.2s, box-shadow 0.2s;
+  }
+  /* number 输入框右侧有 spinner，增大右内边距避免数字被遮挡 */
+  #calcGoodsTable input[type="number"] { text-align: right; padding-right: 22px; }
+  #calcGoodsTable input:focus { border-color: #0071e3; box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.12); }
+  .g-sub { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .calc-mini { font-size: 12px; color: #86868b; font-weight: 600; margin-top: 4px; }
   #rateChart { height: 300px; }
   /* —— 表格 —— */
   table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
@@ -954,8 +1043,9 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   }
   .grid input:focus { border-color: #0071e3; box-shadow: 0 0 0 4px rgba(0, 113, 227, 0.12); }
   .result { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 20px; }
-  .result .card { min-width: 150px; }
-  .result .value { font-size: 22px; }
+  .result .card { min-width: 150px; flex: 1 1 160px; }
+  .result .value { font-size: 20px; line-height: 1.25; word-break: break-all; white-space: normal; }
+  .result .value .sub { font-size: 13px; color: #86868b; font-weight: 500; margin-top: 2px; }
   .result .value.green { color: #248a3d; }
   /* —— 胶囊按钮（Apple Blue）—— */
   button {
@@ -984,149 +1074,236 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   footer { text-align: center; color: #86868b; font-size: 12px; padding: 28px 22px 40px;
            border-top: 0.5px solid #e8e8ed; margin-top: 28px; }
   footer a { color: #0066cc; text-decoration: none; }
-  /* —— 窄屏适配 —— */
+  /* —— 控制台三栏式布局：顶栏 + 左侧全高侧栏 + 右侧展示栏 —— */
+  .layout { display: flex; min-height: calc(100vh - 52px); align-items: stretch; }
+  /* 侧栏：独立区块，占满左侧整列高度（自顶栏下沿延伸至视口底部），自身背景与内容区区分 */
+  .sidebar {
+    width: 224px; flex-shrink: 0;
+    position: sticky; top: 52px; height: calc(100vh - 52px);
+    background: #fff; border-right: 0.5px solid rgba(0, 0, 0, 0.08);
+    padding: 18px 12px 24px; overflow-y: auto;
+    display: flex; flex-direction: column;
+  }
+  .sidebar .side-title { color: #86868b; font-size: 11px; font-weight: 600; letter-spacing: .06em;
+                         text-transform: uppercase; padding: 0 10px 12px; }
+  .sidebar .nav-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 11px 12px; border-radius: 10px; color: #424245;
+    font-size: 14px; cursor: pointer; text-decoration: none; margin-bottom: 4px;
+    transition: background .15s, color .15s;
+  }
+  .sidebar .nav-item .ico { width: 20px; text-align: center; font-size: 15px; flex-shrink: 0; }
+  .sidebar .nav-item:hover { background: rgba(0, 113, 227, 0.07); color: #0071e3; }
+  .sidebar .nav-item.active {
+    background: linear-gradient(135deg, #0071e3, #0a84ff); color: #fff; font-weight: 600;
+    box-shadow: 0 4px 12px rgba(0, 113, 227, 0.28);
+  }
+  .sidebar .side-foot { margin-top: auto; padding: 14px 10px 4px; border-top: 0.5px solid #e8e8ed;
+                        font-size: 11px; color: #a1a1a6; line-height: 1.6; }
+  /* 展示栏：占满剩余宽度 */
+  .content { flex: 1; min-width: 0; padding: 26px 30px 40px; }
+  .content-inner { max-width: 1280px; }
+  .page { display: none; }
+  .page.active { display: block; }
+  /* —— 窄屏适配：侧栏转为顶部横向导航 —— */
   @media (max-width: 768px) {
-    .hero { padding: 48px 22px 8px; }
-    .hero h1 { font-size: 34px; }
-    nav .links { gap: 14px; }
+    nav .nav-inner { padding: 0 16px; }
     .grid { grid-template-columns: repeat(2, 1fr); }
     .section-head h2 { font-size: 24px; }
+    .layout { flex-direction: column; min-height: 0; }
+    .sidebar {
+      width: 100%; position: static; height: auto;
+      flex-direction: row; flex-wrap: nowrap; overflow-x: auto;
+      gap: 8px; padding: 10px 14px; border-right: none; border-bottom: 0.5px solid rgba(0, 0, 0, 0.08);
+    }
+    .sidebar .side-title { display: none; }
+    .sidebar .nav-item { margin-bottom: 0; white-space: nowrap; }
+    .sidebar .side-foot { display: none; }
+    .content { padding: 20px 16px 32px; }
   }
 </style>
 </head>
 <body>
 <nav>
   <div class="nav-inner">
-    <span class="brand">中加贸易分析</span>
-    <div class="links">
-      <a href="#overview">概览</a><a href="#rates">汇率</a><a href="#policies">政策</a><a href="#parts">配件报价</a>
-      <a href="#ai">AI 分析</a><a href="#calculator">测算器</a>
+    <span class="brand"><span class="logo">贸</span>中加贸易分析</span>
+    <div class="top-info">
+      <span><span class="dot"></span><span id="navDate">—</span></span>
+      <span id="navStatus" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">加载中…</span>
     </div>
   </div>
 </nav>
 
-<header class="hero">
-  <div class="eyebrow">重庆 × 深圳 · 对加纳出口贸易</div>
-  <h1>贸易智能分析</h1>
-  <div class="sub">汇率、政策与利润，尽在一屏之间。</div>
-</header>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="side-title">功能导航</div>
+    <a class="nav-item active" data-view="overview" onclick="switchView('overview')"><span class="ico">📊</span>概览</a>
+    <a class="nav-item" data-view="rates" onclick="switchView('rates')"><span class="ico">📈</span>汇率趋势</a>
+    <a class="nav-item" data-view="policies" onclick="switchView('policies')"><span class="ico">📰</span>政策监控</a>
+    <a class="nav-item" data-view="parts" onclick="switchView('parts')"><span class="ico">🔩</span>配件报价</a>
+    <a class="nav-item" data-view="ai" onclick="switchView('ai')"><span class="ico">🤖</span>AI 日报</a>
+    <a class="nav-item" data-view="calculator" onclick="switchView('calculator')"><span class="ico">🧮</span>利润测算</a>
+    <div class="side-foot">数据来源：open.er-api.com ｜ 各部委 / 人社局官网<br>模型依据《中加纳出口贸易创业方案书》<br><b style="color:#d70015">经营红线：美元计价 · 尾款付清放货 · 对公收款 · 禁买单出口</b></div>
+  </aside>
+  <main class="content">
+  <div class="content-inner">
 
-<div class="container">
+  <section class="page active" id="view-overview">
+    <div class="section-head" id="overview">
+      <div class="kicker">Overview</div>
+      <h2>今日概览</h2>
+      <div class="desc">汇率自动采集自 open.er-api.com，政策监控覆盖商务部等 6 个官网。</div>
+    </div>
+    <div class="cards" id="rateCards"></div>
+  </section>
 
-<div class="section-head" id="overview">
-  <div class="kicker">Overview</div>
-  <h2>今日概览</h2>
-  <div class="desc">汇率自动采集自 open.er-api.com，政策监控覆盖商务部等 6 个官网。</div>
-</div>
-<div class="cards" id="rateCards"></div>
+  <section class="page" id="view-rates">
+    <div class="section-head" id="rates">
+      <div class="kicker">Exchange Rates</div>
+      <h2>汇率走势</h2>
+      <div class="desc">USD 兑 CNY / GHS。USD/GHS 上行即塞地贬值，是本模式最大风险变量。</div>
+    </div>
+    <div class="panel">
+      <div id="rateChart"></div>
+    </div>
+  </section>
 
-<div class="section-head" id="rates">
-  <div class="kicker">Exchange Rates</div>
-  <h2>汇率走势</h2>
-  <div class="desc">USD 兑 CNY / GHS。USD/GHS 上行即塞地贬值，是本模式最大风险变量。</div>
-</div>
-<div class="panel">
-  <div id="rateChart"></div>
-</div>
+  <section class="page" id="view-policies">
+    <div class="section-head" id="policies">
+      <div class="kicker">Policy Monitor</div>
+      <h2>政策监控</h2>
+      <div class="desc">重点关键词标蓝，今日新增标红。</div>
+    </div>
+    <div class="panel">
+      <button class="btn-sm" onclick="runFetch()">立即采集一次</button>
+      <span id="fetchMsg" style="margin-left:10px;color:#7a8699"></span>
+      <table style="margin-top:12px">
+        <thead><tr><th style="width:90px">来源</th><th>标题</th><th style="width:130px">首次发现</th></tr></thead>
+        <tbody id="policyBody"></tbody>
+      </table>
+    </div>
+  </section>
 
-<div class="section-head" id="policies">
-  <div class="kicker">Policy Monitor</div>
-  <h2>政策监控</h2>
-  <div class="desc">重点关键词标蓝，今日新增标红。</div>
-</div>
-<div class="panel">
-  <button class="btn-sm" onclick="runFetch()">立即采集一次</button>
-  <span id="fetchMsg" style="margin-left:10px;color:#7a8699"></span>
-  <table style="margin-top:12px">
-    <thead><tr><th style="width:90px">来源</th><th>标题</th><th style="width:130px">首次发现</th></tr></thead>
-    <tbody id="policyBody"></tbody>
-  </table>
-</div>
+  <section class="page" id="view-parts">
+    <div class="section-head" id="parts">
+      <div class="kicker">Parts Quotes</div>
+      <h2>配件报价监控</h2>
+      <div class="desc">摩配/汽配批发报价（百度爱采购聚合源），已按关键词相关性过滤辅助配件，并通过 CLIP 视觉模型对商品展示图做 AI 校验，重庆发货地高亮，商品标题可点击跳转。</div>
+    </div>
+    <div class="panel">
+      <div class="askrow" style="margin-top:0">
+        <input id="partKeyword" placeholder="输入配件关键词抓取报价，如：摩托车离合器片 / 汽车雨刮器"
+               onkeydown="if(event.key==='Enter')fetchParts()">
+        <button class="btn-sm" onclick="fetchParts()">抓取该关键词</button>
+        <button class="btn-sm" onclick="fetchPartsAll()">抓取全部默认词</button>
+      </div>
+      <span id="partsMsg" style="color:#7a8699;font-size:13px"></span>
+      <div id="partsStats" class="cards" style="margin-top:14px"></div>
+      <label style="margin-top:10px;display:inline-flex;align-items:center;gap:6px;font-size:13px;color:#555">
+        <input type="checkbox" id="partsConfirmedOnly" checked onchange="loadParts()">
+        仅展示 AI 图像确认的商品（CLIP 零样本校验）
+      </label>
+      <div style="margin-top:10px" id="kwFilter"></div>
+      <table style="margin-top:8px">
+        <thead><tr><th style="width:64px">图片</th><th style="width:110px">关键词</th><th>商品</th>
+          <th style="width:100px">单价
+            <a href="javascript:void(0)" id="sortAscBtn" onclick="sortParts('asc')"
+               title="按单价升序" style="margin-left:4px;font-size:11px;text-decoration:none">▲</a><a
+               href="javascript:void(0)" id="sortDescBtn" onclick="sortParts('desc')"
+               title="按单价降序" style="margin-left:2px;font-size:11px;text-decoration:none">▼</a>
+          </th>
+          <th style="width:80px">起订量</th><th>供应商</th><th style="width:90px">发货地</th></tr></thead>
+        <tbody id="partsBody"></tbody>
+      </table>
+      <div id="partsPager" style="display:flex;align-items:center;gap:12px;margin-top:14px;font-size:13px;color:#86868b">
+        <button class="btn-sm" onclick="partsGo(-1)">← 上一页</button>
+        <span id="partsPageInfo">—</span>
+        <button class="btn-sm" onclick="partsGo(1)">下一页 →</button>
+        <span style="margin-left:auto">每页 10 条</span>
+      </div>
+    </div>
+  </section>
 
-<div class="section-head" id="parts">
-  <div class="kicker">Parts Quotes</div>
-  <h2>配件报价监控</h2>
-  <div class="desc">摩配/汽配批发报价（百度爱采购聚合源），已按关键词相关性过滤辅助配件，并通过 CLIP 视觉模型对商品展示图做 AI 校验，重庆发货地高亮，商品标题可点击跳转。</div>
-</div>
-<div class="panel">
-  <div class="askrow" style="margin-top:0">
-    <input id="partKeyword" placeholder="输入配件关键词抓取报价，如：摩托车离合器片 / 汽车雨刮器"
-           onkeydown="if(event.key==='Enter')fetchParts()">
-    <button class="btn-sm" onclick="fetchParts()">抓取该关键词</button>
-    <button class="btn-sm" onclick="fetchPartsAll()">抓取全部默认词</button>
+  <section class="page" id="view-ai">
+    <div class="section-head" id="ai">
+      <div class="kicker">AI Insights</div>
+      <h2>AI 智能分析</h2>
+      <div class="desc">基于当日汇率与政策自动生成研判日报，也可直接提问。</div>
+    </div>
+    <div class="panel">
+      <h2 style="font-size:18px;font-weight:600;margin-bottom:14px">今日分析日报<span id="aiEngine" class="engine-tag"></span></h2>
+      <button class="btn-sm" onclick="analyzeNow()">生成今日分析日报</button>
+      <span id="analyzeMsg" style="margin-left:10px;color:#7a8699"></span>
+      <div class="md" id="aiReport">点击按钮生成：汇率风险研判 + 政策要点 + 首单建议</div>
+      <div class="askrow">
+        <input id="question" placeholder="向 AI 提问，例如：渝创渝新的申报条件是什么？"
+               onkeydown="if(event.key==='Enter')askAI()">
+        <button class="btn-sm" onclick="askAI()">提问</button>
+      </div>
+      <div class="md" id="aiAnswer" style="display:none"></div>
+    </div>
+  </section>
+
+  <section class="page" id="view-calculator">
+    <div class="section-head" id="calculator">
+      <div class="kicker">Profit Calculator</div>
+      <h2>多商品利润测算器</h2>
+      <div class="desc">可添加多种货物合并计价；海运物流费按商品单件重量自动估算；支持从本地商品库导入（预留数据库接口）。</div>
+    </div>
+    <div class="panel">
+      <h3 class="calc-sub">📦 商品清单<span id="goodsCount" class="calc-tip"></span></h3>
+      <table id="calcGoodsTable">
+        <thead><tr>
+          <th style="width:150px">商品名称</th>
+          <th style="width:120px">采购单价（元/件）</th>
+          <th style="width:110px">数量（件）</th>
+          <th style="width:100px">单件重量（kg）</th>
+          <th>小计（元）</th>
+          <th style="width:52px">操作</th>
+        </tr></thead>
+        <tbody id="calcGoodsBody"></tbody>
+      </table>
+      <div style="margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <button class="btn-sm" onclick="addGoodsRow()">＋ 添加商品</button>
+        <select id="goodsSource" onchange="importGoodsFromDb()"
+                style="height:30px;border:1px solid #d2d2d7;border-radius:8px;padding:0 8px;font-size:13px;color:#424245;background:#fff;max-width:380px">
+          <option value="">从商品库导入…（数据库预留接口）</option>
+        </select>
+      </div>
+
+      <h3 class="calc-sub">🚢 海运物流费</h3>
+      <div style="display:flex;gap:18px;align-items:center;margin-top:2px">
+        <label style="font-size:13px;color:#424245"><input type="radio" name="freightMode" value="auto" checked onchange="syncFreightMode();doCalc()"> 按总重量自动估算</label>
+        <label style="font-size:13px;color:#424245"><input type="radio" name="freightMode" value="fixed" onchange="syncFreightMode();doCalc()"> 固定金额</label>
+      </div>
+      <div class="grid" id="freightAutoBox" style="margin-top:10px">
+        <div><label>基础费（元）</label><input id="freight_base" type="number"></div>
+        <div><label>每公斤海运费（元/kg）</label><input id="freight_per_kg" type="number"></div>
+        <div><label>预估海运物流费</label><input id="freightEst" type="text" readonly style="background:#f5f5f7;color:#1d1d1f;font-weight:600"></div>
+      </div>
+      <div class="grid" id="freightFixedBox" style="display:none;margin-top:10px">
+        <div><label>海运物流费（元）</label><input id="freight" type="number"></div>
+      </div>
+
+      <h3 class="calc-sub">💳 财务与费用参数</h3>
+      <div class="grid">
+        <div><label>报关代理费（元）</label><input id="agent_fee" type="number"></div>
+        <div><label>寄样验货杂费（元）</label><input id="misc_fee" type="number"></div>
+        <div><label>加价率（%）</label><input id="markup" type="number"></div>
+        <div><label>定金比例（%）</label><input id="deposit_ratio" type="number"></div>
+        <div><label>加纳综合税负（%）</label><input id="ghana_tax" type="number"></div>
+        <div><label>重庆合伙人股比（%）</label><input id="equity_a" type="number"></div>
+      </div>
+
+      <div class="result" id="calcResult">
+        <div style="width:100%;padding:18px 0;color:#86868b;text-align:center">正在计算…</div>
+      </div>
+    </div>
+  </section>
+
   </div>
-  <span id="partsMsg" style="color:#7a8699;font-size:13px"></span>
-  <div id="partsStats" class="cards" style="margin-top:14px"></div>
-  <label style="margin-top:10px;display:inline-flex;align-items:center;gap:6px;font-size:13px;color:#555">
-    <input type="checkbox" id="partsConfirmedOnly" checked onchange="loadParts()">
-    仅展示 AI 图像确认的商品（CLIP 零样本校验）
-  </label>
-  <div style="margin-top:10px" id="kwFilter"></div>
-  <table style="margin-top:8px">
-    <thead><tr><th style="width:64px">图片</th><th style="width:110px">关键词</th><th>商品</th>
-      <th style="width:100px">单价
-        <a href="javascript:void(0)" id="sortAscBtn" onclick="sortParts('asc')"
-           title="按单价升序" style="margin-left:4px;font-size:11px;text-decoration:none">▲</a><a
-           href="javascript:void(0)" id="sortDescBtn" onclick="sortParts('desc')"
-           title="按单价降序" style="margin-left:2px;font-size:11px;text-decoration:none">▼</a>
-      </th>
-      <th style="width:80px">起订量</th><th>供应商</th><th style="width:90px">发货地</th></tr></thead>
-    <tbody id="partsBody"></tbody>
-  </table>
-  <div id="partsPager" style="display:flex;align-items:center;gap:12px;margin-top:14px;font-size:13px;color:#86868b">
-    <button class="btn-sm" onclick="partsGo(-1)">← 上一页</button>
-    <span id="partsPageInfo">—</span>
-    <button class="btn-sm" onclick="partsGo(1)">下一页 →</button>
-    <span style="margin-left:auto">每页 10 条</span>
-  </div>
+  </main>
 </div>
-
-<div class="section-head" id="ai">
-  <div class="kicker">AI Insights</div>
-  <h2>AI 智能分析</h2>
-  <div class="desc">基于当日汇率与政策自动生成研判日报，也可直接提问。</div>
-</div>
-<div class="panel">
-  <h2 style="font-size:18px;font-weight:600;margin-bottom:14px">今日分析日报<span id="aiEngine" class="engine-tag"></span></h2>
-  <button class="btn-sm" onclick="analyzeNow()">生成今日分析日报</button>
-  <span id="analyzeMsg" style="margin-left:10px;color:#7a8699"></span>
-  <div class="md" id="aiReport">点击按钮生成：汇率风险研判 + 政策要点 + 首单建议</div>
-  <div class="askrow">
-    <input id="question" placeholder="向 AI 提问，例如：渝创渝新的申报条件是什么？"
-           onkeydown="if(event.key==='Enter')askAI()">
-    <button class="btn-sm" onclick="askAI()">提问</button>
-  </div>
-  <div class="md" id="aiAnswer" style="display:none"></div>
-</div>
-
-<div class="section-head" id="calculator">
-  <div class="kicker">Profit Calculator</div>
-  <h2>首单利润测算器</h2>
-  <div class="desc">财务模型来自方案书表 6，修改任意参数即时重算。</div>
-</div>
-<div class="panel">
-  <div class="grid">
-    <div><label>采购单价（元/件）</label><input id="unit_price" type="number"></div>
-    <div><label>数量（件）</label><input id="quantity" type="number"></div>
-    <div><label>海运物流费（元）</label><input id="freight" type="number"></div>
-    <div><label>报关代理费（元）</label><input id="agent_fee" type="number"></div>
-    <div><label>寄样验货杂费（元）</label><input id="misc_fee" type="number"></div>
-    <div><label>加价率（%）</label><input id="markup" type="number"></div>
-    <div><label>定金比例（%）</label><input id="deposit_ratio" type="number"></div>
-    <div><label>加纳综合税负（%）</label><input id="ghana_tax" type="number"></div>
-    <div><label>重庆合伙人股比（%）</label><input id="equity_a" type="number"></div>
-  </div>
-  <div class="result" id="calcResult">
-    <div style="width:100%;padding:18px 0;color:#86868b;text-align:center">正在计算…</div>
-  </div>
-</div>
-
-</div>
-
-<footer>
-  数据来源：open.er-api.com ｜ 各部委 / 人社局官网 ｜ 模型依据《中加纳出口贸易创业方案书》<br>
-  经营红线：美元计价 · 尾款付清放货 · 对公收款 · 禁买单出口
-</footer>
 
 <script>
 let CFG = null;   // 服务端下发的默认参数 + 最新汇率
@@ -1148,7 +1325,48 @@ async function loadAll() {
     `<div class="card"><div class="label">${c[0]}</div>
      <div class="value">${c[1]}</div><div class="note">${c[2]}</div></div>`).join('');
 
-  // —— 汇率折线图（容错：图表失败不阻断后续测算器等模块初始化）——
+  // —— 顶栏信息：今日日期 + 最新汇率状态 ——
+  const today = new Date();
+  const navDate = document.getElementById('navDate');
+  if (navDate) navDate.textContent =
+    today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' +
+    String(today.getDate()).padStart(2, '0');
+  const navStatus = document.getElementById('navStatus');
+  if (navStatus) navStatus.textContent = r
+    ? `USD/CNY ${r.usd_cny.toFixed(4)} ｜ USD/GHS ${r.usd_ghs.toFixed(4)}`
+    : '暂无汇率数据';
+
+  // —— 汇率折线图延迟到首次进入"汇率趋势"视图时初始化（隐藏容器 init 尺寸异常），见 switchView ——
+
+  // —— 政策列表 ——
+  document.getElementById('policyBody').innerHTML = d.policies.map(p => `
+    <tr><td>${p.source}</td>
+    <td><a href="${p.url}" target="_blank" style="text-decoration:none;color:#1d1d1f">${p.title}</a>
+      ${p.keyword ? `<span class="tag">${p.keyword.split(',')[0]}</span>` : ''}
+      ${p.is_new ? '<span class="tag new">今日新增</span>' : ''}</td>
+    <td>${p.first_seen.slice(0, 10)}</td></tr>`).join('')
+    || '<tr><td colspan="3">暂无数据，请点击"立即采集一次"</td></tr>';
+
+  // —— 加载最近一次 AI 日报（如有）——
+  if (d.last_report) {
+    document.getElementById('aiReport').innerHTML = md2html(d.last_report.content);
+    document.getElementById('aiEngine').textContent =
+      '引擎: ' + d.last_report.engine + ' ｜ ' + d.last_report.ts +
+      (d.ai_enabled ? '' : '（未配置API Key，规则引擎模式）');
+  } else if (!d.ai_enabled) {
+    document.getElementById('aiEngine').textContent = '未配置API Key，当前为规则引擎模式';
+  }
+
+  // —— 测算器初始化（独立函数 initCalc，另在启动时单独调用，防被前序渲染错误阻断）——
+  initCalc(d);
+}
+
+// —— 侧栏视图切换：顶栏保持不变，功能模块通过侧栏进入；图表/配件按需懒加载 ——
+let rateChartInited = false;
+function initRateChart() {
+  if (rateChartInited || !CFG) return;
+  rateChartInited = true;
+  const d = CFG;
   const dates = d.rates.map(x => x.date);
   try {
     const chart = echarts.init(document.getElementById('rateChart'));
@@ -1174,66 +1392,168 @@ async function loadAll() {
         lineStyle: { width: 2.5 } }
     ]
   });
+    window._rateChart = chart;
   } catch (e) {
-    // ECharts 加载失败时给出提示，其余模块（政策/AI/测算器）继续工作
     document.getElementById('rateChart').innerHTML =
       '<div style="padding:40px;color:#86868b;text-align:center">图表组件加载失败，不影响其他功能</div>';
   }
-
-  // —— 政策列表 ——
-  document.getElementById('policyBody').innerHTML = d.policies.map(p => `
-    <tr><td>${p.source}</td>
-    <td><a href="${p.url}" target="_blank" style="text-decoration:none;color:#1d1d1f">${p.title}</a>
-      ${p.keyword ? `<span class="tag">${p.keyword.split(',')[0]}</span>` : ''}
-      ${p.is_new ? '<span class="tag new">今日新增</span>' : ''}</td>
-    <td>${p.first_seen.slice(0, 10)}</td></tr>`).join('')
-    || '<tr><td colspan="3">暂无数据，请点击"立即采集一次"</td></tr>';
-
-  // —— 加载最近一次 AI 日报（如有）——
-  if (d.last_report) {
-    document.getElementById('aiReport').innerHTML = md2html(d.last_report.content);
-    document.getElementById('aiEngine').textContent =
-      '引擎: ' + d.last_report.engine + ' ｜ ' + d.last_report.ts +
-      (d.ai_enabled ? '' : '（未配置API Key，规则引擎模式）');
-  } else if (!d.ai_enabled) {
-    document.getElementById('aiEngine').textContent = '未配置API Key，当前为规则引擎模式';
-  }
-
-  // —— 测算器初始化（独立函数 initCalc，另在启动时单独调用，防被前序渲染错误阻断）——
-  initCalc(d);
+}
+function switchView(name) {
+  document.querySelectorAll('.page').forEach(s =>
+    s.classList.toggle('active', s.id === 'view-' + name));
+  document.querySelectorAll('.sidebar .nav-item').forEach(a =>
+    a.classList.toggle('active', a.dataset.view === name));
+  // 进入"汇率趋势"才初始化图表；切回时刷新尺寸（容器由隐藏转可见需 resize）
+  if (name === 'rates') { initRateChart(); if (window._rateChart) setTimeout(() => window._rateChart.resize(), 60); }
+  // 配件报价懒加载：首次进入才请求接口，避免首屏即拉取
+  if (name === 'parts' && !partsData) { loadParts(); }
+  window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
+// —— 多商品利润测算器 ——
+let goodsSourceList = [];   // 本地商品库缓存（/api/goods）
+
 function initCalc(d) {
-  for (const k of Object.keys(d.calc_defaults)) {
+  const df = d.calc_defaults || {};
+  const di = d.calc_default_item || { name: '', unit_price: 0, quantity: 0, unit_weight: 0 };
+  // 公共参数与费用默认值
+  for (const k of ['agent_fee', 'misc_fee', 'markup', 'deposit_ratio', 'ghana_tax', 'equity_a',
+                   'freight_base', 'freight_per_kg', 'freight']) {
     const el = document.getElementById(k);
-    if (el) { el.value = d.calc_defaults[k]; el.oninput = doCalc; }
+    if (el && df[k] !== undefined) el.value = df[k];
   }
+  // 海运物流费模式
+  const mode = df.freight_mode || 'auto';
+  const radio = document.querySelector('input[name=freightMode][value="' + mode + '"]');
+  if (radio) radio.checked = true;
+  syncFreightMode();
+  addGoodsRow(di);          // 默认一行商品
+  loadGoodsSource();        // 加载商品库下拉（预留数据库接口）
+  doCalc();
+}
+
+function updateGoodsCount() {
+  const n = document.querySelectorAll('#calcGoodsBody tr').length;
+  document.getElementById('goodsCount').textContent = '（' + n + ' 种商品）';
+}
+
+function addGoodsRow(item) {
+  item = item || {};
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td><input class="g-name" placeholder="如：摩托车链条"></td>
+    <td><input class="g-price" type="number" min="0" value="${item.unit_price ?? ''}"></td>
+    <td><input class="g-qty" type="number" min="0" value="${item.quantity ?? ''}"></td>
+    <td><input class="g-w" type="number" min="0" step="0.1" value="${item.unit_weight ?? ''}"></td>
+    <td class="g-sub">—</td>
+    <td><a href="javascript:void(0)" onclick="removeGoodsRow(this)" style="color:#ff3b30;font-size:13px" title="删除该商品">✕</a></td>`;
+  if (item.name) tr.querySelector('.g-name').value = item.name;
+  tr.querySelectorAll('input').forEach(el => el.addEventListener('input', doCalc));
+  document.getElementById('calcGoodsBody').appendChild(tr);
+  updateGoodsCount();
+}
+
+function removeGoodsRow(a) {
+  const body = document.getElementById('calcGoodsBody');
+  if (body.children.length <= 1) { alert('至少保留一种商品'); return; }
+  a.closest('tr').remove();
+  updateGoodsCount();
+  doCalc();
+}
+
+function readGoodsRows() {
+  const rows = [];
+  document.querySelectorAll('#calcGoodsBody tr').forEach(tr => {
+    const num = sel => parseFloat(tr.querySelector(sel).value) || 0;
+    rows.push({
+      name: (tr.querySelector('.g-name').value || '').trim() || ('商品' + (rows.length + 1)),
+      unit_price: num('.g-price'),
+      quantity: num('.g-qty'),
+      unit_weight: num('.g-w')
+    });
+  });
+  return rows;
+}
+
+function syncFreightMode() {
+  const mode = document.querySelector('input[name=freightMode]:checked').value;
+  document.getElementById('freightAutoBox').style.display = mode === 'auto' ? '' : 'none';
+  document.getElementById('freightFixedBox').style.display = mode === 'fixed' ? '' : 'none';
+}
+
+async function loadGoodsSource() {
+  const sel = document.getElementById('goodsSource');
+  try {
+    const d = await (await fetch('/api/goods')).json();
+    goodsSourceList = d.goods || [];
+    sel.innerHTML = '<option value="">从商品库导入…（数据库预留接口）</option>'
+      + goodsSourceList.map(g =>
+          `<option value="${g.id}">${escAttr(g.name)}｜¥${g.unit_price}｜${g.unit_weight}kg/件</option>`).join('');
+  } catch (e) { console.error('goods:', e); }
+}
+
+function importGoodsFromDb() {
+  const sel = document.getElementById('goodsSource');
+  const g = goodsSourceList.find(x => String(x.id) === sel.value);
+  if (!g) return;
+  addGoodsRow({ name: g.name, unit_price: g.unit_price, quantity: g.moq || 1, unit_weight: g.unit_weight });
+  sel.value = '';
   doCalc();
 }
 
 function doCalc() {
-  const p = {}; let valid = true;
-  for (const k of Object.keys(CFG.calc_defaults)) {
-    const v = parseFloat(document.getElementById(k).value);
-    if (isNaN(v)) valid = false;
-    p[k] = v;
-  }
-  if (!valid) return;
-  fetch('/api/calc?' + new URLSearchParams(p)).then(r => r.json()).then(c => {
-    const items = [
-      ['采购成本', '¥' + c.purchase.toLocaleString()],
-      ['总成本', '¥' + c.total_cost.toLocaleString()],
-      ['对加方报价', '¥' + c.quote.toLocaleString() + '（$' + c.quote_usd.toLocaleString() + '）'],
-      ['毛利', '¥' + c.profit.toLocaleString(), true],
-      ['毛利率', c.margin_pct + '%', true],
-      ['定金（先收再采购）', '¥' + c.deposit.toLocaleString()],
-      ['加纳含税到岸成本', '$' + c.ghana_landed_usd.toLocaleString()],
-      ['两人分成 ' + p.equity_a + '/' + (100 - p.equity_a), '¥' + c.share_a.toLocaleString() + ' / ¥' + c.share_b.toLocaleString()]
-    ];
-    document.getElementById('calcResult').innerHTML = items.map(i =>
-      `<div class="card"><div class="label">${i[0]}</div>
-       <div class="value ${i[2] ? 'green' : ''}">${i[1]}</div></div>`).join('');
+  const items = readGoodsRows();
+  if (!items.length) return;
+  const num = id => parseFloat(document.getElementById(id).value) || 0;
+  const p = {
+    items,
+    freight_mode: document.querySelector('input[name=freightMode]:checked').value,
+    freight_base: num('freight_base'),
+    freight_per_kg: num('freight_per_kg'),
+    freight: num('freight'),
+    agent_fee: num('agent_fee'),
+    misc_fee: num('misc_fee'),
+    markup: num('markup'),
+    deposit_ratio: num('deposit_ratio'),
+    ghana_tax: num('ghana_tax'),
+    equity_a: num('equity_a')
+  };
+  fetch('/api/calc', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                       body: JSON.stringify(p) })
+    .then(r => r.json()).then(renderCalc).catch(e => console.error('calc:', e));
+}
+
+function renderCalc(c) {
+  // 商品小计列
+  document.querySelectorAll('#calcGoodsBody tr').forEach((tr, i) => {
+    const it = c.items[i];
+    tr.querySelector('.g-sub').textContent = it ? '¥' + it.purchase.toLocaleString() : '—';
   });
+  // 运费估算
+  const est = document.getElementById('freightEst');
+  if (est) est.value = '¥' + c.freight.toLocaleString();
+  // 商品明细表
+  const rows = c.items.map(it =>
+    `<tr><td>${escAttr(it.name)}</td><td>${it.quantity.toLocaleString()} 件 × ¥${it.unit_price}</td>
+     <td>¥${it.purchase.toLocaleString()}</td><td>${it.weight.toLocaleString()} kg</td></tr>`).join('');
+  const equity = parseFloat(document.getElementById('equity_a').value) || 51;
+  const cards = [
+    ['商品数 / 总重量', c.count + ' 种 / ' + c.total_weight.toLocaleString() + ' kg'],
+    ['采购成本合计', '¥' + c.purchase.toLocaleString()],
+    ['海运物流费', '¥' + c.freight.toLocaleString()],
+    ['总成本', '¥' + c.total_cost.toLocaleString()],
+    ['对加方报价', '¥' + c.quote.toLocaleString() + '<div class="sub">$' + c.quote_usd.toLocaleString() + '</div>'],
+    ['毛利', '¥' + c.profit.toLocaleString(), true],
+    ['毛利率', c.margin_pct + '%', true],
+    ['定金（先收再采购）', '¥' + c.deposit.toLocaleString()],
+    ['加纳含税到岸成本', '$' + c.ghana_landed_usd.toLocaleString()],
+    ['两人分成 ' + equity + '/' + (100 - equity), '¥' + c.share_a.toLocaleString() + ' / ¥' + c.share_b.toLocaleString()]
+  ];
+  document.getElementById('calcResult').innerHTML =
+    '<div class="calc-mini">商品明细</div>' +
+    `<table style="margin:8px 0 16px"><thead><tr><th>商品</th><th>数量 × 单价</th><th>采购小计</th><th>重量</th></tr></thead><tbody>${rows}</tbody></table>` +
+    cards.map(i => `<div class="card"><div class="label">${i[0]}</div>
+                    <div class="value ${i[2] ? 'green' : ''}">${i[1]}</div></div>`).join('');
 }
 
 async function runFetch() {
@@ -1424,8 +1744,8 @@ async function askAI() {
 }
 
 // 主流程：loadAll 内部任何模块出错都不影响测算器（initCalc 独立调用 + 兜底重试）
-loadAll().catch(e => console.error('loadAll 部分失败:', e));
-loadParts();   // 配件报价独立加载，不受汇率/政策渲染影响
+loadAll().then(() => switchView('overview')).catch(e => console.error('loadAll 部分失败:', e));
+// 配件报价改为懒加载：首次进入"配件报价"视图时由 switchView 触发 loadParts，避免首屏即请求
 // 等 summary 返回后由 loadAll 调 initCalc；若 loadAll 意外中断，2 秒后兜底用默认参数初始化测算器
 setTimeout(() => {
   if (!document.getElementById('calcResult').innerHTML) {
@@ -1467,6 +1787,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/summary"):
             self._send(200, build_summary())
         elif self.path.startswith("/api/calc"):
+            # GET 兼容旧版单商品测算（?unit_price=..&quantity=..）
             q = {k: float(v[0]) for k, v in
                  __import__("urllib.parse", fromlist=["parse_qs"]).parse_qs(
                      self.path.split("?", 1)[1]).items()}
@@ -1474,6 +1795,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
             row = conn.execute("SELECT usd_cny FROM rates ORDER BY date DESC LIMIT 1").fetchone()
             conn.close()
             self._send(200, calc_profit(q, usd_cny=row["usd_cny"] if row else 7.2))
+        elif self.path.startswith("/api/goods"):
+            # 本地商品库（供测算器导入；后续「本地数据录入」也写入此表）
+            conn = get_db()
+            rows = [dict(r) for r in conn.execute(
+                "SELECT * FROM goods ORDER BY id DESC")]
+            conn.close()
+            self._send(200, {"goods": rows})
         elif self.path.startswith("/api/parts"):
             # 配件报价列表：?keyword=xxx 可筛选；?confirmed=1 仅返回 AI 图像确认过的商品
             qs = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
@@ -1529,6 +1857,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
             engine, content = generate_ai_report()
             self._send(200, {"engine": engine, "content": content,
                              "ts": datetime.now().strftime("%Y-%m-%d %H:%M")})
+        elif self.path == "/api/calc":
+            # 多商品合并测算：请求体 {"items":[...], "markup":21, ...}
+            body = self._read_json()
+            conn = get_db()
+            row = conn.execute("SELECT usd_cny FROM rates ORDER BY date DESC LIMIT 1").fetchone()
+            conn.close()
+            self._send(200, calc_profit(body, usd_cny=row["usd_cny"] if row else 7.2))
         elif self.path == "/api/ask":
             # 基于政策库的智能问答，请求体 {"question": "..."}
             body = self._read_json()
@@ -1575,6 +1910,7 @@ def build_summary():
     conn.close()
     return {"latest_rate": latest, "rates": rates, "ghs_change_pct": ghs_change,
             "policies": policies, "fetch_log": log, "calc_defaults": CALC_DEFAULTS,
+            "calc_default_item": CALC_DEFAULT_ITEM,
             "ai_enabled": ai_enabled(),
             "last_report": dict(last_report) if last_report else None}
 
@@ -1613,8 +1949,21 @@ def main():
     elif cmd == "serve":
         serve()
     elif cmd == "calc":
-        print("利润测算示例（默认参数，汇率 7.2）：")
-        for k, v in calc_profit().items():
+        print("利润测算示例（多商品 + 按重量估算海运，汇率 7.2）：")
+        p = dict(CALC_DEFAULTS)
+        p["items"] = [dict(CALC_DEFAULT_ITEM),
+                      {"name": "汽车雨刮器", "unit_price": 12.5, "quantity": 3000, "unit_weight": 0.4}]
+        r = calc_profit(p)
+        print("  商品明细:")
+        for it in r["items"]:
+            print(f"    {it['name']}: {it['quantity']:.0f}件 × ¥{it['unit_price']} "
+                  f"= ¥{it['purchase']} ｜ 重量 {it['weight']} kg")
+        print(f"  总重量: {r['total_weight']} kg ｜ 海运物流费(auto): ¥{r['freight']}")
+        for k, v in [("采购成本", r["purchase"]), ("总成本", r["total_cost"]),
+                     ("对加方报价(元)", r["quote"]), ("报价(美元)", r["quote_usd"]),
+                     ("毛利", r["profit"]), ("毛利率%", r["margin_pct"]),
+                     ("定金", r["deposit"]), ("加纳含税到岸(美元)", r["ghana_landed_usd"]),
+                     ("分成51/49", f"{r['share_a']}/{r['share_b']}")]:
             print(f"  {k}: {v}")
     elif cmd == "analyze":
         engine, content = generate_ai_report()
