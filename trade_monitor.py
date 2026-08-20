@@ -1016,8 +1016,17 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     font-size: 13.5px; background: #fff; outline: none;
     transition: border 0.2s, box-shadow 0.2s;
   }
-  /* number 输入框右侧有 spinner，增大右内边距避免数字被遮挡 */
-  #calcGoodsTable input[type="number"] { text-align: right; padding-right: 22px; }
+  /* number 输入框隐藏 spinner 箭头，避免遮挡数字、保证数字完整显示 */
+  #calcGoodsTable input[type="number"] {
+    text-align: right;
+    -moz-appearance: textfield;
+    appearance: textfield;
+  }
+  #calcGoodsTable input[type="number"]::-webkit-inner-spin-button,
+  #calcGoodsTable input[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
   #calcGoodsTable input:focus { border-color: #0071e3; box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.12); }
   .g-sub { font-weight: 600; font-variant-numeric: tabular-nums; }
   .calc-mini { font-size: 12px; color: #86868b; font-weight: 600; margin-top: 4px; }
@@ -1540,7 +1549,7 @@ function renderCalc(c) {
   const cards = [
     ['商品数 / 总重量', c.count + ' 种 / ' + c.total_weight.toLocaleString() + ' kg'],
     ['采购成本合计', '¥' + c.purchase.toLocaleString()],
-    ['海运物流费', '¥' + c.freight.toLocaleString()],
+    ['海运物流费（' + (c.freight_mode === 'auto' ? '按重量估算' : '固定金额') + '）', '¥' + c.freight.toLocaleString()],
     ['总成本', '¥' + c.total_cost.toLocaleString()],
     ['对加方报价', '¥' + c.quote.toLocaleString() + '<div class="sub">$' + c.quote_usd.toLocaleString() + '</div>'],
     ['毛利', '¥' + c.profit.toLocaleString(), true],
