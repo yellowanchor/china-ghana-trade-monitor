@@ -54,6 +54,52 @@
     return res.json();
   }
 
+  /* ---------------- 主题管理 ----------------
+     模式三态：auto（跟随系统，默认）/ light（白天）/ dark（夜晚）
+     - 持久化到 localStorage('tm-theme')
+     - 生效方式：html 根节点加/去 .dark 类（CSS 变量 + Element Plus 暗色变量同时切换）
+     - 切换时广播 window 'themechange' 事件，ECharts 等组件监听后重绘
+  */
+  const themeStore = reactive({
+    mode: (function () {
+      const m = localStorage.getItem('tm-theme');
+      return m === 'light' || m === 'dark' ? m : 'auto';
+    })(),
+  });
+
+  function systemPrefersDark() {
+    return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  }
+  function effectiveTheme() {
+    return themeStore.mode === 'auto' ? (systemPrefersDark() ? 'dark' : 'light') : themeStore.mode;
+  }
+  function applyTheme() {
+    const dark = effectiveTheme() === 'dark';
+    document.documentElement.classList.toggle('dark', dark);
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute('content', dark ? '#161618' : '#f5f5f7');
+    window.dispatchEvent(new CustomEvent('themechange', { detail: { dark } }));
+  }
+  function setThemeMode(mode) {
+    themeStore.mode = mode;
+    localStorage.setItem('tm-theme', mode);
+    applyTheme();
+  }
+  // 点击循环：跟随系统 → 白天 → 夜晚 → 跟随系统
+  function cycleTheme() {
+    setThemeMode(themeStore.mode === 'auto' ? 'light' : themeStore.mode === 'light' ? 'dark' : 'auto');
+  }
+  // 系统主题变化时，auto 模式下实时跟随（无需刷新）
+  (function watchSystemTheme() {
+    if (!window.matchMedia) return;
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const onSys = () => { if (themeStore.mode === 'auto') applyTheme(); };
+    if (mq.addEventListener) mq.addEventListener('change', onSys);
+    else if (mq.addListener) mq.addListener(onSys);
+  })();
+  // 初始化（index.html 里的预置脚本已提前设好 class，这里补广播 + 校正）
+  applyTheme();
+
   /* ============================================================
      视图组件
      ============================================================ */
@@ -115,40 +161,40 @@
         <el-button type="primary" :loading="fetching" @click="runFetch">
           <span class="iconfont icon-arrow-clockwise" style="margin-right:6px"></span>立即采集一次
         </el-button>
-        <span v-if="msg" style="color:#86868b;font-size:12.5px">{{ msg }}</span>
+        <span v-if="msg" style="color:var(--text-3);font-size:12.5px">{{ msg }}</span>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px" class="ov-grid">
         <div class="panel">
-          <h3 class="panel-title"><span class="iconfont icon-newspaper" style="color:#0071e3"></span>政策快览
+          <h3 class="panel-title"><span class="iconfont icon-newspaper" style="color:var(--accent)"></span>政策快览
             <span class="tip">最新 {{ topPolicies.length }} 条</span></h3>
           <div v-if="topPolicies.length">
             <div v-for="p in topPolicies" :key="p.id" style="padding:7px 0;border-bottom:0.5px solid #f0f0f2">
               <div style="display:flex;justify-content:space-between;gap:10px">
                 <a :href="p.url" target="_blank" rel="noopener"
-                   style="color:#1d1d1f;text-decoration:none;line-height:1.5" :title="p.title">{{ p.title }}</a>
+                   style="color:var(--text);text-decoration:none;line-height:1.5" :title="p.title">{{ p.title }}</a>
               </div>
-              <div style="font-size:12px;color:#86868b;margin-top:2px">{{ p.source }}
+              <div style="font-size:12px;color:var(--text-3);margin-top:2px">{{ p.source }}
                 <span v-if="p.keyword" class="tag">{{ p.keyword.split(',')[0] }}</span>
                 <span v-if="p.is_new" class="tag new">今日新增</span>
               </div>
             </div>
           </div>
-          <div v-else style="color:#86868b;padding:12px 0">暂无政策数据，请点击「立即采集一次」</div>
+          <div v-else style="color:var(--text-3);padding:12px 0">暂无政策数据，请点击「立即采集一次」</div>
         </div>
         <div class="panel ov-ai-panel">
-          <h3 class="panel-title"><span class="iconfont icon-magic" style="color:#0071e3"></span>AI 分析日报
+          <h3 class="panel-title"><span class="iconfont icon-magic" style="color:var(--accent)"></span>AI 分析日报
             <span class="tip">{{ summary.last_report ? summary.last_report.ts : '暂无' }}</span>
             <span v-if="summary.last_report && summary.last_report.engine" class="engine-badge" :title="'AI 引擎：' + summary.last_report.engine">{{ summary.last_report.engine }}</span>
             <span v-else-if="!summary.ai_enabled" class="engine-badge rule" title="未配置 API Key，当前为规则引擎模式">规则引擎</span>
           </h3>
-          <div v-if="reportHtml" class="md ov-report" style="color:#424245" v-html="reportHtml"></div>
-          <div v-else style="color:#86868b;padding:12px 0">
+          <div v-if="reportHtml" class="md ov-report" style="color:var(--text-2)" v-html="reportHtml"></div>
+          <div v-else style="color:var(--text-3);padding:12px 0">
             {{ summary.ai_enabled ? '尚未生成日报，可进入「AI 日报」生成。' : '未配置 API Key，当前为规则引擎模式。' }}
           </div>
         </div>
       </div>
       <div class="panel kb-panel">
-        <h3 class="panel-title"><span class="iconfont icon-book" style="color:#0071e3"></span>基础知识文档
+        <h3 class="panel-title"><span class="iconfont icon-book" style="color:var(--accent)"></span>基础知识文档
           <span class="tip">外贸术语 / 认证 / 经营规则</span></h3>
         <div class="kb-grid">
           <div class="kb-section">
@@ -198,13 +244,13 @@
           <div class="kb-section">
             <h4><span class="iconfont icon-cash-coin" style="margin-right:4px"></span>条款与经营规则</h4>
             <dl>
-              <dt>先收定金再采购 <span style="color:#e53935;font-size:11px">经营红线</span></dt>
+              <dt>先收定金再采购 <span style="color:var(--red-strong);font-size:11px">经营红线</span></dt>
               <dd><b>经营红线①</b>：收到客户定金后才能向供应商下单，降低库存与资金风险。定金未到账不得排产发货。这是本项目的零垫资模式核心——用客户的钱做客户的生意。</dd>
-              <dt>尾款付清才电放提单 <span style="color:#e53935;font-size:11px">经营红线</span></dt>
+              <dt>尾款付清才电放提单 <span style="color:var(--red-strong);font-size:11px">经营红线</span></dt>
               <dd><b>经营红线②</b>：提单 = 货权。货物到港后，必须收到100%尾款才能电放提单让收货人提货。提前电放=丧失货权=可能钱货两空。</dd>
-              <dt>对公账户收汇 <span style="color:#e53935;font-size:11px">经营红线</span></dt>
+              <dt>对公账户收汇 <span style="color:var(--red-strong);font-size:11px">经营红线</span></dt>
               <dd><b>经营红线③</b>：货款只走外贸代理对公账户或1039市场采购平台合规结汇，严禁个人账户收经营性外汇。违规可能涉嫌逃汇，面临行政处罚。</dd>
-              <dt>严禁买单出口 <span style="color:#e53935;font-size:11px">经营红线</span></dt>
+              <dt>严禁买单出口 <span style="color:var(--red-strong);font-size:11px">经营红线</span></dt>
               <dd><b>经营红线④</b>：出口走外贸代理或1039市场采购贸易方式（重庆大足试点），严禁买单出口（借他人抬头报关）。买单出口无退税、单据不合规、风险极大。</dd>
               <dt>定金比例</dt>
               <dd>默认30%（覆盖采购成本+海运基础费），大额订单可协商30%-50%。尾款在发货前（FOB/CIF条件下船开前）结清。建议合同约定：T/T 30%预付定金 + T/T 70%发货前付清尾款。</dd>
@@ -240,6 +286,11 @@
     methods: {
       render() {
         if (!this.chart || !this.hasData) return;
+        // 图表配色随主题切换（暗色下轴线/文字用亮灰，避免黑底黑字）
+        const dark = document.documentElement.classList.contains('dark');
+        const axisFg = dark ? '#8e8e95' : '#86868b';
+        const axisLine = dark ? '#4a4a4f' : '#d2d2d7';
+        const splitLine = dark ? '#38383c' : '#e8e8ed';
         this.chart.setOption({
           tooltip: {
             trigger: 'axis',
@@ -272,26 +323,27 @@
                      row('GHS / CNY 交叉', cross, '#34c759');
             },
           },
-          legend: { data: ['USD/CNY', 'USD/GHS'], textStyle: { color: '#86868b' }, top: 4 },
+          legend: { data: ['USD/CNY', 'USD/GHS'], textStyle: { color: axisFg }, top: 4 },
           grid: { left: 52, right: 52, top: 44, bottom: 30 },
-          xAxis: { type: 'category', data: this.dates, axisLine: { lineStyle: { color: '#d2d2d7' } },
-                   axisLabel: { color: '#86868b' } },
+          xAxis: { type: 'category', data: this.dates, axisLine: { lineStyle: { color: axisLine } },
+                   axisLabel: { color: axisFg } },
           yAxis: [
-            { type: 'value', name: '兑CNY', nameTextStyle: { color: '#86868b' },
-              axisLabel: { color: '#86868b' }, splitLine: { lineStyle: { color: '#e8e8ed' } } },
-            { type: 'value', name: '兑GHS', nameTextStyle: { color: '#86868b' },
-              axisLabel: { color: '#86868b' }, splitLine: { show: false } },
+            { type: 'value', name: '兑CNY', nameTextStyle: { color: axisFg },
+              axisLabel: { color: axisFg }, splitLine: { lineStyle: { color: splitLine } } },
+            { type: 'value', name: '兑GHS', nameTextStyle: { color: axisFg },
+              axisLabel: { color: axisFg }, splitLine: { show: false } },
           ],
           series: [
             { name: 'USD/CNY', type: 'line', smooth: true, data: (this.rates || []).map(x => x.usd_cny),
               symbolSize: 6, itemStyle: { color: '#ff3b30' }, lineStyle: { width: 2.5 } },
             { name: 'USD/GHS', type: 'line', smooth: true, yAxisIndex: 1,
               symbolSize: 6, data: (this.rates || []).map(x => x.usd_ghs),
-              itemStyle: { color: '#0071e3' }, lineStyle: { width: 2.5 } },
+              itemStyle: { color: dark ? '#409cff' : '#0071e3' }, lineStyle: { width: 2.5 } },
           ],
         });
       },
       onResize() { if (this.chart) this.chart.resize(); },
+      onTheme() { this.render(); },
     },
     mounted() {
       nextTick(() => {
@@ -299,9 +351,11 @@
         this.render();
       });
       window.addEventListener('resize', this.onResize);
+      window.addEventListener('themechange', this.onTheme);
     },
     beforeUnmount() {
       window.removeEventListener('resize', this.onResize);
+      window.removeEventListener('themechange', this.onTheme);
       if (this.chart) { this.chart.dispose(); this.chart = null; }
     },
     watch: { rates() { this.$nextTick(() => this.render()); } },
@@ -329,7 +383,7 @@
       </div>
       <div class="panel">
         <div ref="chartBox" style="height:420px"></div>
-        <div v-if="!hasData" style="color:#86868b;text-align:center;padding:30px">暂无汇率数据，请先采集</div>
+        <div v-if="!hasData" style="color:var(--text-3);text-align:center;padding:30px">暂无汇率数据，请先采集</div>
       </div>
     </div>`,
   };
@@ -361,7 +415,7 @@
         <el-input v-model="kw" placeholder="搜索标题 / 来源 / 关键词" clearable style="width:280px">
           <template #prefix><span class="iconfont icon-search"></span></template>
         </el-input>
-        <span style="color:#86868b;font-size:12.5px">
+        <span style="color:var(--text-3);font-size:12.5px">
           共 {{ filtered.length }} 条<span v-if="todayCount"> ｜ 今日新增 {{ todayCount }} 条</span>
         </span>
       </div>
@@ -369,24 +423,24 @@
         <el-table :data="filtered" size="default" style="width:100%">
           <el-table-column prop="source" label="来源" width="130">
             <template #default="{ row }">
-              <span style="font-weight:600;color:#424245">{{ row.source }}</span>
+              <span style="font-weight:600;color:var(--text-2)">{{ row.source }}</span>
             </template>
           </el-table-column>
           <el-table-column label="标题" min-width="420">
             <template #default="{ row }">
               <a :href="row.url" target="_blank" rel="noopener" :title="row.title"
-                 style="color:#1d1d1f;text-decoration:none">{{ row.title }}</a>
+                 style="color:var(--text);text-decoration:none">{{ row.title }}</a>
               <span v-if="row.keyword" class="tag">{{ row.keyword.split(',')[0] }}</span>
               <span v-if="row.is_new" class="tag new">今日新增</span>
             </template>
           </el-table-column>
           <el-table-column label="收录时间" width="120">
             <template #default="{ row }">
-              <span style="color:#86868b;font-size:12.5px">{{ String(row.first_seen).slice(0, 10) }}</span>
+              <span style="color:var(--text-3);font-size:12.5px">{{ String(row.first_seen).slice(0, 10) }}</span>
             </template>
           </el-table-column>
         </el-table>
-        <div v-if="!filtered.length" style="color:#86868b;padding:20px;text-align:center">
+        <div v-if="!filtered.length" style="color:var(--text-3);padding:20px;text-align:center">
           暂无数据，请在概览页点击「立即采集一次」
         </div>
       </div>
@@ -510,18 +564,18 @@
           <span class="iconfont icon-arrow-clockwise" style="margin-right:6px"></span>抓取全部默认词
         </el-button>
         <el-switch v-model="confirmed" active-text="仅看 AI 确认" @change="load()" style="margin-left:4px" />
-        <span v-if="fetchMsg" style="color:#86868b;font-size:12.5px">{{ fetchMsg }}</span>
+        <span v-if="fetchMsg" style="color:var(--text-3);font-size:12.5px">{{ fetchMsg }}</span>
       </div>
       <div class="grid-cards">
         <div class="card" style="cursor:pointer" v-for="s in stats" :key="s.keyword" @click="filterKw(s.keyword)">
           <div class="label">{{ s.keyword }}</div>
-          <div class="value" style="font-size:18px">¥{{ Number(s.min_price).toFixed(2) }}<span style="font-size:12px;color:#86868b"> 起</span></div>
+          <div class="value" style="font-size:18px">¥{{ Number(s.min_price).toFixed(2) }}<span style="font-size:12px;color:var(--text-3)"> 起</span></div>
           <div class="note">均价 ¥{{ s.avg_price }} ｜ {{ s.n }} 条</div>
         </div>
-        <div v-if="!stats.length" class="card" style="grid-column:1/-1;color:#86868b">暂无报价数据，点击上方按钮抓取</div>
+        <div v-if="!stats.length" class="card" style="grid-column:1/-1;color:var(--text-3)">暂无报价数据，点击上方按钮抓取</div>
       </div>
       <div class="toolbar" v-if="stats.length">
-        <span style="font-size:12px;color:#86868b">筛选：</span>
+        <span style="font-size:12px;color:var(--text-3)">筛选：</span>
         <a class="link-plain" :class="{ active: !kwFilter }" @click="filterKw(null)">全部</a>
         <a class="link-plain" v-for="s in stats" :key="s.keyword"
            :class="{ active: kwFilter === s.keyword }" @click="filterKw(s.keyword)">{{ s.keyword }}</a>
@@ -536,16 +590,16 @@
               <a v-if="row.img" :href="row.url || row.img" target="_blank" rel="noopener" title="点击查看商品大图/页面">
                 <img class="parts-img" :src="row.img" alt="商品图" loading="lazy">
               </a>
-              <span v-else style="color:#ccc">—</span>
+              <span v-else style="color:var(--placeholder-fg)">—</span>
             </template>
           </el-table-column>
           <el-table-column prop="keyword" label="关键词" width="120">
-            <template #default="{ row }"><span style="color:#424245">{{ row.keyword }}</span></template>
+            <template #default="{ row }"><span style="color:var(--text-2)">{{ row.keyword }}</span></template>
           </el-table-column>
           <el-table-column label="标题" min-width="320">
             <template #default="{ row }">
               <a v-if="row.url" :href="row.url" target="_blank" rel="noopener"
-                 style="color:#0071e3;text-decoration:none;border-bottom:1px dotted #0071e3"
+                 style="color:var(--accent);text-decoration:none;border-bottom:1px dotted var(--accent)"
                  :title="'点击打开商品页面：' + row.title">{{ row.title }}</a>
               <span v-else :title="row.title">{{ row.title }}</span>
               <span class="tag" :class="aiBadge(row).cls" :title="row.img_ok === 1 ? 'AI 图像校验通过' : (row.img_ok === 0 ? 'AI 图像校验未通过' : '未进行 AI 图像校验')">{{ aiBadge(row).txt }}</span>
@@ -559,17 +613,17 @@
             </template>
           </el-table-column>
           <el-table-column prop="moq" label="MOQ" width="90">
-            <template #default="{ row }"><span style="color:#424245">{{ row.moq || '-' }}</span></template>
+            <template #default="{ row }"><span style="color:var(--text-2)">{{ row.moq || '-' }}</span></template>
           </el-table-column>
           <el-table-column label="供应商" min-width="140">
             <template #default="{ row }">
-              <span :title="row.supplier" style="color:#424245;display:inline-block;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom">{{ row.supplier }}</span>
+              <span :title="row.supplier" style="color:var(--text-2);display:inline-block;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom">{{ row.supplier }}</span>
             </template>
           </el-table-column>
           <el-table-column label="发货地" width="110">
             <template #default="{ row }">
               <span v-if="String(row.location || '').indexOf('重庆') >= 0" class="tag loc-hl">{{ row.location }}</span>
-              <span v-else style="color:#424245">{{ row.location || '-' }}</span>
+              <span v-else style="color:var(--text-2)">{{ row.location || '-' }}</span>
             </template>
           </el-table-column>
           <el-table-column label="纠正" width="110" align="center">
@@ -582,13 +636,13 @@
                          @click="reviewImg(row, 0)" title="CLIP 误判了？点击确认这其实不是该商品，系统会学习该图">
                 其实不是
               </el-button>
-              <span v-else style="color:#ccc;font-size:12px">—</span>
+              <span v-else style="color:var(--placeholder-fg);font-size:12px">—</span>
             </template>
           </el-table-column>
         </el-table>
-        <div v-if="!allQuotes.length && !loading" style="color:#86868b;padding:20px;text-align:center">暂无数据</div>
+        <div v-if="!allQuotes.length && !loading" style="color:var(--text-3);padding:20px;text-align:center">暂无数据</div>
         <div style="display:flex;align-items:center;justify-content:flex-end;gap:12px;margin-top:12px">
-          <span style="color:#86868b;font-size:12.5px">
+          <span style="color:var(--text-3);font-size:12.5px">
             第 {{ page }}/{{ pages }} 页 ｜ 共 {{ allQuotes.length }} 条
           </span>
           <el-button size="small" :disabled="page <= 1" @click="go(-1)">上一页</el-button>
@@ -644,18 +698,18 @@
           <el-button type="primary" :loading="generating" @click="generate">
             <span class="iconfont icon-robot" style="margin-right:6px"></span>生成当日日报
           </el-button>
-          <span v-if="engine" style="color:#86868b;font-size:12.5px">
+          <span v-if="engine" style="color:var(--text-3);font-size:12.5px">
             引擎: {{ engine }} ｜ {{ ts }}<span v-if="!aiEnabled">（未配置API Key，规则引擎模式）</span>
           </span>
-          <span v-else-if="!aiEnabled" style="color:#86868b;font-size:12.5px">
+          <span v-else-if="!aiEnabled" style="color:var(--text-3);font-size:12.5px">
             未配置 API Key，当前为规则引擎模式（可在 ai_config.json 配置智谱 / DeepSeek Key）
           </span>
         </div>
         <div v-if="content" class="md" style="line-height:1.75" v-html="md2html(content)"></div>
-        <div v-else style="color:#86868b;padding:24px 0;text-align:center">尚无日报，点击上方按钮生成</div>
+        <div v-else style="color:var(--text-3);padding:24px 0;text-align:center">尚无日报，点击上方按钮生成</div>
       </div>
       <div class="panel">
-        <h3 class="panel-title"><span class="iconfont icon-chat-dots" style="color:#0071e3"></span>政策智能问答</h3>
+        <h3 class="panel-title"><span class="iconfont icon-chat-dots" style="color:var(--accent)"></span>政策智能问答</h3>
         <div style="display:flex;gap:10px">
           <el-input v-model="question" placeholder="如：近期有哪些与出口退税相关的政策？" clearable @keyup.enter="ask"></el-input>
           <el-button type="primary" :loading="asking" @click="ask">
@@ -827,7 +881,7 @@
       </div>
       <div class="contract-layout">
         <div class="contract-editor panel">
-          <h3 class="panel-title"><span class="iconfont icon-file-earmark-text" style="color:#0071e3"></span>合同文本
+          <h3 class="panel-title"><span class="iconfont icon-file-earmark-text" style="color:var(--accent)"></span>合同文本
             <span class="tip">编辑或粘贴合同全文</span></h3>
           <div class="toolbar" style="margin-bottom:10px;flex-wrap:wrap;gap:6px">
             <el-select v-model="type" style="width:180px" @change="switchType">
@@ -857,28 +911,28 @@
         </div>
         <div class="contract-result panel">
           <h3 class="panel-title">
-            <span class="iconfont icon-shield-check" style="color:#0071e3"></span>审核结果
+            <span class="iconfont icon-shield-check" style="color:var(--accent)"></span>审核结果
             <span v-if="result" class="engine-badge" :title="'审核引擎：' + result.engine">{{ result.engine }}</span>
           </h3>
-          <div v-if="reviewing" style="color:#86868b;padding:30px 0;text-align:center">
+          <div v-if="reviewing" style="color:var(--text-3);padding:30px 0;text-align:center">
             <span class="iconfont icon-arrow-clockwise" style="font-size:24px;animation:spin 1s linear infinite;display:inline-block"></span>
             <p style="margin-top:10px">AI 正在审核合同，约 10-30 秒…</p>
           </div>
           <div v-else-if="result" style="overflow:hidden">
             <div class="risk-banner" :style="{borderColor: riskColor}">
               <span class="risk-label" :style="{color: riskColor}">{{ riskLabel }}</span>
-              <span style="color:#86868b;font-size:12.5px">风险扣分 {{ 100 - (result.risk_score || 0) }}/100</span>
-              <span style="color:#86868b;font-size:12.5px"> ｜ {{ result.ts }}</span>
+              <span style="color:var(--text-3);font-size:12.5px">风险扣分 {{ 100 - (result.risk_score || 0) }}/100</span>
+              <span style="color:var(--text-3);font-size:12.5px"> ｜ {{ result.ts }}</span>
             </div>
             <div class="md contract-review-md" v-html="md2html(result.review)"></div>
           </div>
-          <div v-else style="color:#86868b;padding:30px 0;text-align:center">
+          <div v-else style="color:var(--text-3);padding:30px 0;text-align:center">
             点击「AI 审核」按钮，开始审核合同文本
           </div>
         </div>
       </div>
       <div v-if="showHistory && history.length" class="panel" v-loading="loadingHistory">
-        <h3 class="panel-title"><span class="iconfont icon-clock" style="color:#0071e3"></span>审核历史</h3>
+        <h3 class="panel-title"><span class="iconfont icon-clock" style="color:var(--accent)"></span>审核历史</h3>
         <el-table :data="history" size="small" style="width:100%">
           <el-table-column prop="title" label="合同标题" min-width="180"></el-table-column>
           <el-table-column label="风险等级" width="100">
@@ -890,7 +944,7 @@
           </el-table-column>
           <el-table-column prop="engine" label="引擎" width="140"></el-table-column>
           <el-table-column label="时间" width="140">
-            <template #default="{ row }"><span style="color:#86868b">{{ fmtDate(row.created_at) }}</span></template>
+            <template #default="{ row }"><span style="color:var(--text-3)">{{ fmtDate(row.created_at) }}</span></template>
           </el-table-column>
           <el-table-column label="操作" width="80" align="center">
             <template #default="{ row }">
@@ -1100,7 +1154,7 @@
         <div class="desc">按品类分别计算加纳税负（摩配CET10% vs 成品CET20-35%）；支持保存报价、AI预测对比。</div>
       </div>
       <div class="panel">
-        <h3 class="panel-title"><span class="iconfont icon-box-seam" style="color:#0071e3"></span>商品清单
+        <h3 class="panel-title"><span class="iconfont icon-box-seam" style="color:var(--accent)"></span>商品清单
           <span class="tip">（{{ items.length }} 种商品）</span></h3>
         <el-table :data="items" class="goods-table" style="width:100%">
           <el-table-column label="商品名称" min-width="150">
@@ -1160,44 +1214,44 @@
         </div>
       </div>
       <div class="panel">
-        <h3 class="panel-title"><span class="iconfont icon-truck" style="color:#0071e3"></span>海运物流费</h3>
+        <h3 class="panel-title"><span class="iconfont icon-truck" style="color:var(--accent)"></span>海运物流费</h3>
         <el-radio-group v-model="freightMode" style="margin-bottom:12px">
           <el-radio value="auto">按总重量自动估算</el-radio>
           <el-radio value="fixed">固定金额</el-radio>
         </el-radio-group>
         <div v-if="freightMode === 'auto'" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px">
-          <div><div class="label" style="font-size:12px;color:#86868b;margin-bottom:4px">基础费（元）</div>
+          <div><div class="label" style="font-size:12px;color:var(--text-3);margin-bottom:4px">基础费（元）</div>
             <el-input-number v-model="params.freight_base" :controls="false" :min="0" style="width:100%"></el-input-number></div>
-          <div><div class="label" style="font-size:12px;color:#86868b;margin-bottom:4px">每公斤海运费（元/kg）</div>
+          <div><div class="label" style="font-size:12px;color:var(--text-3);margin-bottom:4px">每公斤海运费（元/kg）</div>
             <el-input-number v-model="params.freight_per_kg" :controls="false" :min="0" :precision="2" style="width:100%"></el-input-number></div>
-          <div><div class="label" style="font-size:12px;color:#86868b;margin-bottom:4px">预估海运物流费</div>
+          <div><div class="label" style="font-size:12px;color:var(--text-3);margin-bottom:4px">预估海运物流费</div>
             <el-input :model-value="result ? fmtMoney(result.freight) : '—'" readonly
-                      style="font-weight:600;color:#1d1d1f"></el-input></div>
+                      style="font-weight:600;color:var(--text)"></el-input></div>
         </div>
         <div v-else style="max-width:260px">
-          <div class="label" style="font-size:12px;color:#86868b;margin-bottom:4px">海运物流费（元）</div>
+          <div class="label" style="font-size:12px;color:var(--text-3);margin-bottom:4px">海运物流费（元）</div>
           <el-input-number v-model="params.freight" :controls="false" :min="0" style="width:100%"></el-input-number>
         </div>
       </div>
       <div class="panel">
-        <h3 class="panel-title"><span class="iconfont icon-cash-coin" style="color:#0071e3"></span>财务与费用参数</h3>
+        <h3 class="panel-title"><span class="iconfont icon-cash-coin" style="color:var(--accent)"></span>财务与费用参数</h3>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px">
-          <div><div class="label" style="font-size:12px;color:#86868b;margin-bottom:4px">报关代理费（元）</div>
+          <div><div class="label" style="font-size:12px;color:var(--text-3);margin-bottom:4px">报关代理费（元）</div>
             <el-input-number v-model="params.agent_fee" :controls="false" :min="0" style="width:100%"></el-input-number></div>
-          <div><div class="label" style="font-size:12px;color:#86868b;margin-bottom:4px">寄样验货杂费（元）</div>
+          <div><div class="label" style="font-size:12px;color:var(--text-3);margin-bottom:4px">寄样验货杂费（元）</div>
             <el-input-number v-model="params.misc_fee" :controls="false" :min="0" style="width:100%"></el-input-number></div>
-          <div><div class="label" style="font-size:12px;color:#86868b;margin-bottom:4px">加价率（%）</div>
+          <div><div class="label" style="font-size:12px;color:var(--text-3);margin-bottom:4px">加价率（%）</div>
             <el-input-number v-model="params.markup" :controls="false" :min="0" style="width:100%"></el-input-number></div>
-          <div><div class="label" style="font-size:12px;color:#86868b;margin-bottom:4px">定金比例（%）</div>
+          <div><div class="label" style="font-size:12px;color:var(--text-3);margin-bottom:4px">定金比例（%）</div>
             <el-input-number v-model="params.deposit_ratio" :controls="false" :min="0" style="width:100%"></el-input-number></div>
-          <div><div class="label" style="font-size:12px;color:#86868b;margin-bottom:4px">加纳综合税负（%，未选品类时用）</div>
+          <div><div class="label" style="font-size:12px;color:var(--text-3);margin-bottom:4px">加纳综合税负（%，未选品类时用）</div>
             <el-input-number v-model="params.ghana_tax" :controls="false" :min="0" style="width:100%"></el-input-number></div>
-          <div><div class="label" style="font-size:12px;color:#86868b;margin-bottom:4px">重庆合伙人股比（%）</div>
+          <div><div class="label" style="font-size:12px;color:var(--text-3);margin-bottom:4px">重庆合伙人股比（%）</div>
             <el-input-number v-model="params.equity_a" :controls="false" :min="0" :max="100" style="width:100%"></el-input-number></div>
         </div>
       </div>
       <div class="panel" v-loading="loading">
-        <h3 class="panel-title"><span class="iconfont icon-currency-exchange" style="color:#0071e3"></span>测算结果</h3>
+        <h3 class="panel-title"><span class="iconfont icon-currency-exchange" style="color:var(--accent)"></span>测算结果</h3>
         <template v-if="result">
           <div class="calc-sub">商品明细（含分品类税负）</div>
           <el-table :data="result.items" size="small" style="width:100%;margin-bottom:8px">
@@ -1205,7 +1259,7 @@
             <el-table-column label="品类" min-width="100">
               <template #default="{ row }">
                 <span v-if="row.category_name">{{ row.category_name }}</span>
-                <span v-else style="color:#86868b">未分类</span>
+                <span v-else style="color:var(--text-3)">未分类</span>
               </template>
             </el-table-column>
             <el-table-column label="数量 × 单价" min-width="130">
@@ -1219,7 +1273,7 @@
             </el-table-column>
             <el-table-column label="加纳税率" min-width="80">
               <template #default="{ row }">
-                <span style="font-weight:600;color:#e53935">{{ row.ghana_tax_pct }}%</span>
+                <span style="font-weight:600;color:var(--red-strong)">{{ row.ghana_tax_pct }}%</span>
               </template>
             </el-table-column>
             <el-table-column label="到岸成本" min-width="90">
@@ -1233,11 +1287,11 @@
             </div>
           </div>
         </template>
-        <div v-else style="color:#86868b;padding:18px 0;text-align:center">正在计算…</div>
+        <div v-else style="color:var(--text-3);padding:18px 0;text-align:center">正在计算…</div>
       </div>
       <div class="panel">
         <h3 class="panel-title">
-          <span class="iconfont icon-robot" style="color:#0071e3"></span>报价操作：保存 / AI预测对比
+          <span class="iconfont icon-robot" style="color:var(--accent)"></span>报价操作：保存 / AI预测对比
         </h3>
         <div class="toolbar" style="margin-bottom:14px">
           <el-button type="primary" @click="openSaveDialog" :disabled="!result">
@@ -1253,13 +1307,13 @@
         <!-- AI 预测对比面板 -->
         <div v-if="aiPrediction" class="ai-compare-panel">
           <div class="calc-sub" style="margin-bottom:10px">
-            <span class="iconfont icon-graph-up" style="color:#0071e3;margin-right:4px"></span>
+            <span class="iconfont icon-graph-up" style="color:var(--accent);margin-right:4px"></span>
             AI vs 人工报价对比
-            <span class="tag" style="background:#eef2ff;color:#0071e3;margin-left:8px">{{ aiPrediction.engine }}</span>
+            <span class="tag" style="background:#eef2ff;color:var(--accent);margin-left:8px">{{ aiPrediction.engine }}</span>
           </div>
           <div class="compare-grid">
             <div class="compare-col">
-              <div class="compare-header" style="color:#1d1d1f">人工报价</div>
+              <div class="compare-header" style="color:var(--text)">人工报价</div>
               <div class="compare-row"><span>加价率</span><b>{{ aiPrediction.manual_markup }}%</b></div>
               <div class="compare-row"><span>报价</span><b>{{ fmtMoney(aiPrediction.manual_quote) }}</b></div>
               <div class="compare-row"><span>毛利</span><b>{{ fmtMoney(aiPrediction.predicted_profit ? aiPrediction.manual_quote - result.total_cost : 0) }}</b></div>
@@ -1276,7 +1330,7 @@
             <span v-if="aiPrediction.diff_pct > 0">（AI建议更高报价）</span>
             <span v-else>（AI建议更低报价）</span>
           </div>
-          <div v-else class="compare-diff" style="color:#86868b">AI与人工报价一致</div>
+          <div v-else class="compare-diff" style="color:var(--text-3)">AI与人工报价一致</div>
           <div class="compare-reasoning" v-html="md2html(aiPrediction.reasoning)"></div>
         </div>
         <!-- 报价历史列表 -->
@@ -1300,11 +1354,11 @@
       <!-- 保存报价单对话框 -->
       <el-dialog v-model="saveDialogVisible" title="保存报价单" width="460px">
         <div style="margin-bottom:14px">
-          <div class="label" style="font-size:12px;color:#86868b;margin-bottom:4px">报价单名称</div>
+          <div class="label" style="font-size:12px;color:var(--text-3);margin-bottom:4px">报价单名称</div>
           <el-input v-model="quoteName" placeholder="如：首单摩配5SKU"></el-input>
         </div>
         <div>
-          <div class="label" style="font-size:12px;color:#86868b;margin-bottom:4px">备注</div>
+          <div class="label" style="font-size:12px;color:var(--text-3);margin-bottom:4px">备注</div>
           <el-input v-model="quoteNote" type="textarea" :rows="2" placeholder="可选"></el-input>
         </div>
         <template #footer>
@@ -1323,6 +1377,7 @@
     data() {
       return {
         activeView: 'overview',
+        theme: themeStore,
         summary: { latest_rate: null, rates: [], ghs_change_pct: null, policies: [], fetch_log: [],
                    calc_defaults: {}, calc_default_item: {}, categories: [], ai_enabled: false, last_report: null },
         loading: true,
@@ -1330,6 +1385,16 @@
       };
     },
     computed: {
+      themeIcon() {
+        return this.theme.mode === 'dark' ? 'icon-moon-stars'
+          : this.theme.mode === 'light' ? 'icon-sun' : 'icon-circle-half';
+      },
+      themeTitle() {
+        const names = { auto: '跟随系统（当前' + (effectiveTheme() === 'dark' ? '夜晚' : '白天') + '）',
+                        light: '白天', dark: '夜晚' };
+        const next = { auto: '白天', light: '夜晚', dark: '跟随系统' }[this.theme.mode];
+        return '主题：' + names[this.theme.mode] + '，点击切换为「' + next + '」';
+      },
       dateStr() {
         const t = new Date();
         return t.getFullYear() + '-' + String(t.getMonth() + 1).padStart(2, '0') + '-' + String(t.getDate()).padStart(2, '0');
@@ -1352,6 +1417,7 @@
         } finally { this.loading = false; }
       },
       onSelect(index) { this.activeView = index; },
+      cycleTheme,
     },
     mounted() { this.loadSummary(); },
     template: `
@@ -1364,7 +1430,9 @@
         <div class="top-right">
           <span class="rate-status" :title="rateTip">{{ rateText }}</span>
           <span class="nav-icon" title="用户中心（预留功能位）"><span class="iconfont icon-person-circle"></span></span>
-          <span class="nav-icon" title="主题切换（预留功能位）"><span class="iconfont icon-sun"></span></span>
+          <span class="nav-icon theme-toggle" :title="themeTitle" @click="cycleTheme">
+            <span class="iconfont" :class="themeIcon"></span>
+          </span>
           <span class="nav-icon" title="消息通知（预留功能位）"><span class="iconfont icon-bell"></span></span>
         </div>
       </el-header>

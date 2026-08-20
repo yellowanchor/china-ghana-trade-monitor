@@ -11,6 +11,17 @@
 <link rel="stylesheet" href="/vendor/element-plus/index.css">
 <link rel="stylesheet" href="/vendor/iconfont/iconfont.css">
 <link rel="stylesheet" href="/css/app.css">
+<script>
+/* 主题预置：在页面渲染前根据 localStorage / 系统偏好设置 dark 类，防止闪烁 */
+(function () {
+  try {
+    var m = localStorage.getItem('tm-theme');
+    var dark = m === 'dark' || (m !== 'light' && window.matchMedia
+      && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    if (dark) document.documentElement.classList.add('dark');
+  } catch (e) { /* localStorage 不可用时忽略，走默认浅色 */ }
+})();
+</script>
 </head>
 <body>
 <div id="app"></div>
