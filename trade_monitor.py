@@ -34,6 +34,7 @@
 """
 
 import gzip
+import hashlib
 import json
 import os
 import re
@@ -202,6 +203,21 @@ AI_CONFIG_TEMPLATE = {
          "api_key": "",     # ← 填入备用 Key 后启用
          "model": "deepseek-chat"},
     ],
+    # ---- 配件报价数据源（预留多源适配层）----
+    # "aigou"（默认）：百度爱采购 b2b.baidu.com 页面采集，无需认证。
+    #   官方说明：爱采购 API 仅面向入驻商家/认证服务商开放（商品上架/订单同步等写入型
+    #   接口，需 API 白名单），无面向第三方的商品搜索公开 API，故保留页面采集方式。
+    # "1688"：1688 开放平台 API（alibaba.item.search）。
+    #   接入流程：open.1688.com → 开发者中心 → 企业实名认证（个人权限受限）→
+    #   创建应用（需提交 MRD 至 zhaoshang@service.alibaba.com 审核）→ 获取
+    #   App Key / App Secret → 申请 alibaba.item.search 接口权限。
+    "parts_source": "aigou",
+    # 1688 开放平台 API 凭证（parts_source="1688" 时必填）
+    "api_1688": {
+        "app_key": "",
+        "app_secret": "",
+        "access_token": "",   # OAuth2.0 令牌（部分接口需要；搜索接口可留空）
+    },
 }
 
 # 最近一次成功调用实际使用的模型名（多通道容灾后用于日报署名）
@@ -770,12 +786,99 @@ def _price_band_filter(items, get_price):
     return [p for p in items if lo <= get_price(p) <= hi]
 
 
+# ---- 数据源适配层（多源预留）------------------------------------------------
+# 归一化商品字段约定（与爱采购 SSR JSON 保持同构，下游过滤/CLIP/入库零改动）：
+#   fullName=标题  price=单价(float)  priceList=[{minValue,unitCode}]=起订量
+#   tpProvider.name=供应商  fhLocation=发货地  picUrl=商品图  jUrl=商品页链接
+def parts_source():
+    """当前配件数据源："aigou"（爱采购页面采集）或 "1688"（开放平台 API）。"""
+    try:
+        return (load_ai_config().get("parts_source") or "aigou").strip().lower()
+    except Exception:
+        return "aigou"
+
+
+def _sign_1688(params, app_secret):
+    """
+    1688 开放平台 MD5 签名（官方规范）：
+    参数按 key 的 ASCII 升序排序 → 拼接为 key1value1key2value2（无分隔符）
+    → 首尾各拼接一次 app_secret → MD5 加密 → 转大写。
+    """
+    joined = "".join(k + str(v) for k, v in sorted(params.items()) if v is not None and k != "sign")
+    return hashlib.md5((app_secret + joined + app_secret).encode("utf-8")).hexdigest().upper()
+
+
+def _search_1688(kw, page_size=40):
+    """
+    1688 开放平台商品搜索（alibaba.item.search）→ 归一化商品对象列表。
+    预留接口：需在 ai_config.json 配置 parts_source="1688" 及 api_1688 凭证
+    （企业认证 + 创建应用审核通过后获取）。未配置时抛出带指引的异常。
+    """
+    cfg = (load_ai_config().get("api_1688") or {})
+    app_key = (cfg.get("app_key") or "").strip()
+    app_secret = (cfg.get("app_secret") or "").strip()
+    if not app_key or not app_secret:
+        raise RuntimeError(
+            "1688 API 未配置：需在 open.1688.com 完成企业实名认证并创建应用"
+            "（提交 MRD 审核），然后在 ai_config.json 填入 api_1688.app_key/app_secret "
+            "并将 parts_source 设为 \"1688\"；当前可继续使用爱采购源（parts_source=\"aigou\"）")
+    params = {
+        "app_key": app_key,
+        "method": "alibaba.item.search",
+        "timestamp": str(int(time.time())),      # 秒级时间戳（毫秒级会签名失败）
+        "format": "json",
+        "v": "2.0",
+        "sign_method": "md5",
+        "q": kw,                                  # 搜索关键词（需 URL 编码）
+        "page": 1,
+        "pageSize": min(page_size, 40),           # 官方上限 40
+        "sort": "price_asc",
+    }
+    if cfg.get("access_token"):
+        params["access_token"] = cfg["access_token"]
+    params["sign"] = _sign_1688(params, app_secret)
+    url = "https://gw.open.1688.com/openapi/param2/1/portals.open/api/findItem?" + \
+        urllib.parse.urlencode(params)
+    req = urllib.request.Request(url, headers={"User-Agent": "trade-monitor/1.0"})
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        data = json.loads(resp.read().decode("utf-8", "ignore"))
+    # 官方响应：{success, result:{items:[...]}, error_code, error_message}
+    if not data.get("success"):
+        raise RuntimeError(f"1688 API 返回错误: {data.get('error_message') or data.get('error_code')}")
+    items = ((data.get("result") or {}).get("items")) or []
+    out = []
+    for it in items:
+        try:
+            price = float(it.get("price") or 0)
+        except (TypeError, ValueError):
+            price = 0
+        # 发货地：兼容字符串 / {province, city} 对象两种返回格式
+        loc = it.get("sendGoodsAddress")
+        if not loc:
+            raw_loc = it.get("location")
+            loc = raw_loc if isinstance(raw_loc, str) else ((raw_loc or {}).get("city") or "")
+        out.append({
+            "fullName": it.get("subject") or it.get("title") or "",
+            "price": price,
+            "priceList": [{"minValue": it.get("minOrderQuantity") or "",
+                           "unitCode": it.get("unit") or ""}],
+            "tpProvider": {"name": it.get("companyName") or it.get("sellerNick") or ""},
+            "fhLocation": loc or "",
+            "picUrl": (it.get("picUrl") or it.get("image") or ""),
+            "jUrl": it.get("detailUrl") or it.get("offerUrl") or "",
+        })
+    return out
+
+
 def fetch_parts(keywords=None, save_top=30):
     """
-    抓取百度爱采购（b2b.baidu.com）批发报价，写入 parts_quotes 表。
-    数据源说明：爱采购聚合了 1688/各地供应商的公开批发报价，无需登录、无强反爬；
-    重庆本地供应商会出现在结果中（发货地字段可筛选）。1688 官网是 JS 反爬，
-    故采用此聚合源；如需 1688 明细，可后续用 Playwright 增强。
+    抓取配件批发报价，写入 parts_quotes 表。多源适配（ai_config.json 的 parts_source）：
+      · "aigou"（默认）— 百度爱采购 b2b.baidu.com 页面采集。数据源说明：爱采购聚合了
+        1688/各地供应商的公开批发报价，无需登录、无强反爬；重庆本地供应商会出现在
+        结果中（发货地字段可筛选）。爱采购官方 API 仅面向入驻商家/认证服务商（写入型
+        接口，需白名单认证），无公开搜索 API，故保留页面采集方式。
+      · "1688" — 1688 开放平台 API（alibaba.item.search，需企业认证 + 应用审核后
+        在 ai_config.json 配置 api_1688 凭证；未配置时报错并提示切回 aigou）。
     过滤规则：① 标题须含关键词核心词且非辅助配件/工具/服务；
              ② 单价 ∈ [1, 10000]，且落在中位数价格带宽 [中位数/5, 中位数×5] 内，
                剔除搜索页混入的其他商品异常价格；
@@ -827,11 +930,15 @@ def fetch_parts(keywords=None, save_top=30):
         if summary:                                # 关键词之间留间隔，避免触发限流
             time.sleep(2)
         try:
-            # 两轮搜索：全网比价 + "重庆"前缀定向（爱采购 URL 不支持地区参数，用关键词实现）
-            # 两次搜索间留 5 秒间隔，避免触发百度限流（403）
-            products = _search(kw)
-            time.sleep(5)
-            products += _search("重庆 " + kw)
+            if parts_source() == "1688":
+                # 1688 开放平台 API：单轮搜索（结果自带发货地字段，无需"重庆"前缀二轮）
+                products = _search_1688(kw)
+            else:
+                # 爱采购页面采集：两轮搜索（全网比价 + "重庆"前缀定向，
+                # 爱采购 URL 不支持地区参数，用关键词实现）；两次搜索间留 5 秒避免限流（403）
+                products = _search(kw)
+                time.sleep(5)
+                products += _search("重庆 " + kw)
             if not products:
                 raise RuntimeError("未解析到商品数据")
             # 合并去重（同名同供应商），过滤 <1 元的低价引流噪音后按价格升序入库
@@ -1637,7 +1744,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             kw = (body.get("keyword") or "").strip()
             results = fetch_parts([kw] if kw else None)
             kw_, ok, msg = results[0]
-            self._send(200, {"ok": ok, "msg": msg, "keyword": kw_})
+            self._send(200, {"ok": ok, "msg": msg, "keyword": kw_,
+                             "source": parts_source()})
         elif self.path == "/api/analyze":
             # 生成 AI/规则引擎日报（大模型调用可能耗时较久）
             engine, content = generate_ai_report()

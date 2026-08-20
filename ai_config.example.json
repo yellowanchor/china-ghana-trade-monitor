@@ -11,5 +11,11 @@
       "api_key": "sk-你的备用Key",
       "model": "deepseek-chat"
     }
-  ]
+  ],
+  "parts_source": "aigou",
+  "api_1688": {
+    "app_key": "",
+    "app_secret": "",
+    "access_token": ""
+  }
 }
