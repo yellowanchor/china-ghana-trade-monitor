@@ -972,7 +972,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     height: 52px; padding: 0 24px;
     display: flex; align-items: center; justify-content: space-between;
   }
-  nav .brand { display: flex; align-items: center; gap: 10px;
+  nav .brand { display: flex; align-items: center; gap: 10px; flex-shrink: 0;
                font-weight: 700; font-size: 15.5px; letter-spacing: -0.01em; }
   nav .brand .logo {
     width: 28px; height: 28px; border-radius: 8px;
@@ -980,9 +980,21 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     color: #fff; display: inline-flex; align-items: center; justify-content: center;
     font-size: 14px;
   }
-  nav .top-info { display: flex; align-items: center; gap: 14px; color: #86868b; font-size: 12.5px; }
+  nav .top-info { display: flex; align-items: center; gap: 12px; color: #86868b; font-size: 12.5px; min-width: 0; }
   nav .top-info .dot { width: 7px; height: 7px; border-radius: 50%; background: #34c759;
                        display: inline-block; margin-right: 6px; }
+  nav .top-info #navDate, nav .top-info #navStatus { white-space: nowrap; }
+  nav .top-info #navStatus { color: #424245; font-weight: 500; }
+  /* 顶栏右侧功能预留位（用户/主题切换/通知等，待接入） */
+  nav .nav-actions { display: flex; align-items: center; gap: 8px; margin-left: 4px; }
+  nav .nav-icon {
+    width: 30px; height: 30px; border-radius: 50%;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: #f5f5f7; color: #424245; font-size: 14px; text-decoration: none;
+    border: 0.5px solid rgba(0, 0, 0, 0.06); cursor: pointer;
+    transition: background .15s, transform .1s;
+  }
+  nav .nav-icon:hover { background: #e8e8ed; transform: scale(1.06); }
   /* —— 章节标题（仿苹果分区标题）—— */
   .section-head { padding: 44px 4px 18px; }
   .section-head .kicker { color: #86868b; font-size: 12px; font-weight: 600;
@@ -1117,6 +1129,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   /* —— 窄屏适配：侧栏转为顶部横向导航 —— */
   @media (max-width: 768px) {
     nav .nav-inner { padding: 0 16px; }
+    nav .top-info #navStatus { display: none; }
     .grid { grid-template-columns: repeat(2, 1fr); }
     .section-head h2 { font-size: 24px; }
     .layout { flex-direction: column; min-height: 0; }
@@ -1138,7 +1151,12 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     <span class="brand"><span class="logo">贸</span>中加贸易分析</span>
     <div class="top-info">
       <span><span class="dot"></span><span id="navDate">—</span></span>
-      <span id="navStatus" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">加载中…</span>
+      <span id="navStatus">加载中…</span>
+      <div class="nav-actions">
+        <a class="nav-icon" href="javascript:void(0)" title="用户中心（预留功能位 1）">👤</a>
+        <a class="nav-icon" href="javascript:void(0)" title="主题切换（预留功能位 2）">🎨</a>
+        <a class="nav-icon" href="javascript:void(0)" title="消息通知（预留功能位 3）">🔔</a>
+      </div>
     </div>
   </div>
 </nav>
@@ -1341,9 +1359,12 @@ async function loadAll() {
     today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' +
     String(today.getDate()).padStart(2, '0');
   const navStatus = document.getElementById('navStatus');
-  if (navStatus) navStatus.textContent = r
-    ? `USD/CNY ${r.usd_cny.toFixed(4)} ｜ USD/GHS ${r.usd_ghs.toFixed(4)}`
-    : '暂无汇率数据';
+  if (navStatus) {
+    navStatus.textContent = r
+      ? `USD/CNY ${r.usd_cny.toFixed(4)}｜USD/GHS ${r.usd_ghs.toFixed(4)}`
+      : '暂无汇率数据';
+    navStatus.title = '最新汇率：USD/CNY 美元兑人民币 ｜ USD/GHS 美元兑加纳塞地';
+  }
 
   // —— 汇率折线图延迟到首次进入"汇率趋势"视图时初始化（隐藏容器 init 尺寸异常），见 switchView ——
 
