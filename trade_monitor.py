@@ -72,7 +72,9 @@ _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(_BASE_DIR, "trade_monitor.db")
 
 # 看板服务地址与端口
-HOST, PORT = "127.0.0.1", 8765
+# 本地开发默认 127.0.0.1（仅本机访问）；服务器部署设环境变量 TM_HOST=0.0.0.0 对外监听
+HOST = os.environ.get("TM_HOST", "127.0.0.1")
+PORT = int(os.environ.get("TM_PORT", "8765"))
 
 # 免费汇率 API（无需密钥）：返回各国货币兑 1 USD 的汇率
 RATE_API = "https://open.er-api.com/v6/latest/USD"
@@ -3691,8 +3693,13 @@ def build_summary():
             "last_report": dict(last_report) if last_report else None}
 
 
-def serve():
-    """启动 Web 看板：若当日还没有汇率数据，先自动补采一次。"""
+def serve(host=None, port=None, open_browser=True):
+    """启动 Web 看板：若当日还没有汇率数据，先自动补采一次。
+    host/port 优先用参数，其次环境变量 TM_HOST/TM_PORT，最后 127.0.0.1:8765。
+    open_browser=False 时不自动打开浏览器（服务器部署用）。
+    """
+    h = host or HOST
+    p = port or PORT
     conn = get_db()
     today = datetime.now().strftime("%Y-%m-%d")
     has_today = conn.execute("SELECT 1 FROM rates WHERE date=?", (today,)).fetchone()
@@ -3700,9 +3707,10 @@ def serve():
     if not has_today:
         print("当日尚无汇率数据，先自动采集一次 ...")
         fetch_rates()
-    print(f"看板已启动：http://{HOST}:{PORT}  （浏览器将自动打开，Ctrl+C 退出）")
-    server = ThreadingHTTPServer((HOST, PORT), DashboardHandler)
-    webbrowser.open(f"http://{HOST}:{PORT}")
+    print(f"看板已启动：http://{h}:{p}  （{'浏览器将自动打开，' if open_browser else ''}Ctrl+C 退出）")
+    server = ThreadingHTTPServer((h, p), DashboardHandler)
+    if open_browser:
+        webbrowser.open(f"http://{h}:{p}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -3723,7 +3731,15 @@ def main():
     if cmd == "fetch":
         run_fetch()
     elif cmd == "serve":
-        serve()
+        # 启动看板：python trade_monitor.py serve [--host 0.0.0.0] [--port 8765] [--no-browser]
+        # 服务器部署：TM_HOST=0.0.0.0 python trade_monitor.py serve --no-browser
+        import argparse
+        ap = argparse.ArgumentParser(description="启动 Web 看板")
+        ap.add_argument("--host", default=None, help="监听地址，默认环境变量 TM_HOST 或 127.0.0.1")
+        ap.add_argument("--port", type=int, default=None, help="监听端口，默认环境变量 TM_PORT 或 8765")
+        ap.add_argument("--no-browser", action="store_true", help="不自动打开浏览器（服务器部署用）")
+        ns = ap.parse_args(sys.argv[2:])
+        serve(host=ns.host, port=ns.port, open_browser=not ns.no_browser)
     elif cmd == "calc":
         print("利润测算示例（多商品 + 按重量估算海运，汇率 7.2）：")
         p = dict(CALC_DEFAULTS)

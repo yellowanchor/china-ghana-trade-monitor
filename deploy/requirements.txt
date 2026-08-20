@@ -1,0 +1,12 @@
+# 服务器端 Python 依赖
+# 核心服务仅用标准库，无需任何 pip 包即可运行看板 + 采集 + 鉴权
+# 以下为可选依赖：
+
+# PDF 合同导出（合同多类型排版需要）
+reportlab>=4.0
+
+# CLIP 图像校验（可选，配件报价图验证；需要 ONNX Runtime + numpy）
+# 取消注释以启用：
+# onnxruntime>=1.16
+# numpy>=1.24
+# Pillow>=10.0

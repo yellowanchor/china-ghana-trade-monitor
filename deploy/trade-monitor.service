@@ -1,0 +1,40 @@
+# trade-monitor.service — systemd 服务单元文件
+# 安装方式（以 root 执行）：
+#   cp deploy/trade-monitor.service /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable trade-monitor      # 开机自启
+#   systemctl start trade-monitor       # 立即启动
+#   systemctl status trade-monitor      # 查看状态
+#   journalctl -u trade-monitor -f      # 实时日志
+
+[Unit]
+Description=China-Ghana Trade Monitor Dashboard
+After=network.target
+
+[Service]
+Type=simple
+# 部署路径（按实际修改）
+WorkingDirectory=/opt/trade-monitor
+# Python 路径（用 venv；如系统 Python 则改为 /usr/bin/python3）
+ExecStart=/opt/trade-monitor/venv/bin/python3 /opt/trade-monitor/trade_monitor.py serve --no-browser
+# 环境变量：对外监听（配合 Nginx 反代，仅本机 8765 不暴露公网）
+Environment=TM_HOST=127.0.0.1
+Environment=TM_PORT=8765
+# 运行用户
+User=www-data
+Group=www-data
+# 自动重启
+Restart=always
+RestartSec=3
+# 日志
+StandardOutput=journal
+StandardError=journal
+# 安全加固
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/trade-monitor
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
