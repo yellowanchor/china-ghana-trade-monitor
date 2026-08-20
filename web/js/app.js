@@ -50,8 +50,15 @@
   }
   async function api(url, options) {
     const res = await fetch(url, options);
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    return res.json();
+    const ct = res.headers.get('content-type') || '';
+    const isJson = ct.indexOf('json') >= 0;
+    const data = isJson ? await res.json().catch(() => null) : null;
+    if (!res.ok) {
+      // 透传后端 JSON error 文案（如「当前密码错误，身份验证失败」），便于前端展示
+      const msg = (data && data.error) ? data.error : ('HTTP ' + res.status);
+      throw new Error(msg);
+    }
+    return data !== null ? data : res;
   }
 
   /* ---------------- 主题管理 ----------------
@@ -1383,6 +1390,9 @@
                    calc_defaults: {}, calc_default_item: {}, categories: [], ai_enabled: false, last_report: null },
         loading: true,
         error: '',
+        settingsVisible: false,
+        settingsSaving: false,
+        settingsForm: { account: '', username: '', email: '', phone: '', old_password: '', password: '', confirm: '' },
       };
     },
     computed: {
@@ -1431,10 +1441,51 @@
         if (cmd === 'logout') {
           api('/api/auth/logout').finally(() => { window.location.href = '/login.html'; });
         } else if (cmd === 'settings') {
-          ElMessage.info('账号设置（修改邮箱/手机号/密码/实名）即将上线');
+          this.openSettings();
         } else if (cmd === 'realname') {
           ElMessage.info('实名认证（预留支付宝实名 API）即将上线');
         }
+      },
+      openSettings() {
+        const m = this.me || {};
+        this.settingsForm = {
+          account: m.account || '', username: m.username || '',
+          email: m.email || '', phone: m.phone || '',
+          old_password: '', password: '', confirm: '',
+        };
+        this.settingsVisible = true;
+      },
+      async saveSettings() {
+        const f = this.settingsForm;
+        if (!f.username) { ElMessage.warning('用户名不能为空'); return; }
+        if (f.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(f.email)) { ElMessage.warning('邮箱格式不正确'); return; }
+        if (f.phone && !/^1\d{10}$/.test(f.phone)) { ElMessage.warning('手机号格式不正确'); return; }
+        const payload = { username: f.username, email: f.email, phone: f.phone };
+        // 仅当填写新密码时才发起改密（须当前密码验证身份，且不可与最近 5 次相同）
+        if (f.password) {
+          if (!f.old_password) { ElMessage.warning('修改密码需先填写当前密码以验证身份'); return; }
+          if (f.password.length < 8 || !/[A-Za-z]/.test(f.password) || !/\d/.test(f.password)) {
+            ElMessage.warning('新密码至少 8 位，且同时包含字母和数字'); return;
+          }
+          if (f.password !== f.confirm) { ElMessage.warning('两次输入的新密码不一致'); return; }
+          payload.old_password = f.old_password;
+          payload.password = f.password;
+        }
+        this.settingsSaving = true;
+        try {
+          const r = await api('/api/auth/update', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          this.me = r.user;
+          this.settingsForm.old_password = '';
+          this.settingsForm.password = '';
+          this.settingsForm.confirm = '';
+          ElMessage.success('已保存');
+          this.settingsVisible = false;
+        } catch (e) {
+          ElMessage.error(e.message || '保存失败');
+        } finally { this.settingsSaving = false; }
       },
       cycleTheme,
     },
@@ -1494,6 +1545,40 @@
           <CalculatorView v-else :defaults="summary.calc_defaults" :default-item="summary.calc_default_item" :categories="summary.categories" />
         </el-main>
       </el-container>
+      <el-dialog v-model="settingsVisible" title="账号设置" width="460px" :close-on-click-modal="false" append-to-body>
+        <el-form label-width="96px" label-position="right" :model="settingsForm" @submit.prevent>
+          <div class="settings-section-title">基本资料</div>
+          <el-form-item label="账号">
+            <el-input :model-value="settingsForm.account" disabled></el-input>
+          </el-form-item>
+          <el-form-item label="用户名">
+            <el-input v-model="settingsForm.username" placeholder="昵称"></el-input>
+          </el-form-item>
+          <el-form-item label="邮箱">
+            <el-input v-model="settingsForm.email" placeholder="name@example.com"></el-input>
+          </el-form-item>
+          <el-form-item label="手机号">
+            <el-input v-model="settingsForm.phone" placeholder="11 位手机号"></el-input>
+          </el-form-item>
+          <div class="settings-section-title">
+            修改密码
+            <span class="settings-hint">（需当前密码验证身份，且不能与前 5 次使用过的密码相同）</span>
+          </div>
+          <el-form-item label="当前密码">
+            <el-input v-model="settingsForm.old_password" type="password" show-password placeholder="留空则不修改密码"></el-input>
+          </el-form-item>
+          <el-form-item label="新密码">
+            <el-input v-model="settingsForm.password" type="password" show-password placeholder="≥8 位，字母+数字"></el-input>
+          </el-form-item>
+          <el-form-item label="确认新密码">
+            <el-input v-model="settingsForm.confirm" type="password" show-password></el-input>
+          </el-form-item>
+        </el-form>
+        <template #footer>
+          <el-button @click="settingsVisible = false">取消</el-button>
+          <el-button type="primary" :loading="settingsSaving" @click="saveSettings">保存</el-button>
+        </template>
+      </el-dialog>
     </el-container>`,
   };
 

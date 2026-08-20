@@ -571,3 +571,19 @@ html.dark .topbar .nav-icon.theme-toggle:hover { color: #ffd60a; }
 @media (max-width: 900px) {
   .contract-layout { grid-template-columns: 1fr !important; }
 }
+
+/* ===== 账号设置弹窗 ===== */
+.settings-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent, #0071e3);
+  margin: 4px 0 12px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border, rgba(0,0,0,.08));
+}
+.settings-section-title .settings-hint {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-2, #86868b);
+}
+
