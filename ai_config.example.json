@@ -1,6 +1,15 @@
 {
-  "base_url": "https://api.deepseek.com/v1",
-  "api_key": "sk-你的密钥",
-  "model": "deepseek-chat",
-  "timeout": 60
+  "base_url": "https://open.bigmodel.cn/api/paas/v4",
+  "api_key": "sk-你的智谱Key",
+  "model": "glm-4.7-flash",
+  "timeout": 60,
+  "extra_body": { "thinking": { "type": "disabled" } },
+  "rate_api_key": "",
+  "fallbacks": [
+    {
+      "base_url": "https://api.deepseek.com/v1",
+      "api_key": "sk-你的备用Key",
+      "model": "deepseek-chat"
+    }
+  ]
 }

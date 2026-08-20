@@ -24,7 +24,7 @@
   python trade_monitor.py analyze   # 生成 AI 分析日报
   python trade_monitor.py parts     # 采集配件批发报价（默认关键词）
   python trade_monitor.py parts 摩托车离合器片 汽车雨刮器  # 自定义关键词采集
-  python trade_monitor.py history        # 回填最近 30 天历史汇率（有 rate_api_key 全量，否则中间价补 CNY）
+  python trade_monitor.py history        # 回填最近 30 天历史汇率（有 rate_api_key 全量含GHS，否则 ECB 补 CNY）
   python trade_monitor.py history 90     # 回填最近 90 天
   python trade_monitor.py analyze   # 生成一份 AI（或规则引擎）日报并打印
 
@@ -71,10 +71,11 @@ HOST, PORT = "127.0.0.1", 8765
 # 免费汇率 API（无需密钥）：返回各国货币兑 1 USD 的汇率
 RATE_API = "https://open.er-api.com/v6/latest/USD"
 
-# 汇率历史回填（可选）：exchange-rateapi.com 免费层含 30 天历史（300 请求/月，Reuters 数据）。
-# 在 ai_config.json 填入 rate_api_key 后自动启用（USD/CNY + USD/GHS 全量市场中间价）；
+# 汇率历史回填（可选）：allratestoday.com 免费层（160+ 货币含 CNY/GHS、历史免费、300 请求/月，
+# 个人非商用；Bearer 认证）。在 ai_config.json 填入 rate_api_key 后自动启用
+# （USD/CNY + USD/GHS 全量市场中间价，period=30d 返回含周末的日历日序列）；
 # 未填 key 时自动降级：用欧洲央行(ECB)参考汇率经 frankfurter 补 USD/CNY 历史（仅工作日，无 GHS）。
-RATE_HISTORY_API = "https://exchange-rateapi.com/api/historical-rates"
+RATE_HISTORY_API = "https://allratestoday.com/api/historical-rates"
 
 # 无 key 兜底：frankfurter.app —— 欧洲央行参考汇率，免费、无需 key、历史可回溯至 1999 年。
 # 仅覆盖 ECB 货币（USD/CNY 可用），不支持 GHS；范围查询格式：{start}..{end}?from=USD&to=CNY
@@ -142,8 +143,8 @@ AI_CONFIG_TEMPLATE = {
     "api_key": "",          # ← 填入你的 API Key 后即启用真正的大模型分析
     "model": "glm-4.7-flash",
     "timeout": 60,
-    # (可选) 汇率历史回填 key：exchange-rateapi.com 免费注册（300 请求/月，无信用卡），
-    # 填入后 `history` 命令可回填 USD/CNY + USD/GHS 最近 30 天；留空自动降级官方中间价补 CNY
+    # (可选) 汇率历史回填 key：allratestoday.com 免费注册（300 请求/月，个人非商用，无需信用卡），
+    # 填入后 `history` 命令可回填 USD/CNY + USD/GHS 最近 30 天；留空自动降级 ECB 参考价补 CNY
     "rate_api_key": "",
     # 备用通道（可选）：主通道失败时按顺序自动切换
     "fallbacks": [
@@ -290,80 +291,62 @@ def _load_rate_api_key():
         return None
 
 
-def _parse_history_payload(data):
+def _parse_history_payload(data, target):
     """
-    防御性解析 exchange-rateapi.com 历史端点响应，提取 {date: (usd_cny, usd_ghs)}。
-    该服务免费层响应格式可能随版本变化，兼容多种常见结构：
-      结构1：{"data": [{"date": "...", "rate": {"CNY": .., "GHS": ..}}, ...]}
-      结构2：{"rates": {"2026-08-19": {"CNY": .., "GHS": ..}, ...}}
+    解析 allratestoday.com 历史端点响应，提取 {date: rate}。
+    响应结构：{"source":"USD","target":"CNY","data":[{"date":"2026-07-22","rate":6.76745,"timestamp":...}]}
     无法识别返回 None（调用方给出原始响应片段便于排查）。
     """
-    if isinstance(data, dict) and isinstance(data.get("data"), list):
-        rows = []
-        for item in data["data"]:
-            if not isinstance(item, dict):
-                continue
-            date = str(item.get("date") or "")[:10]
-            r = item.get("rate") if isinstance(item.get("rate"), dict) else item
-            if not date or not isinstance(r, dict):
-                continue
-            cny, ghs = r.get("CNY"), r.get("GHS")
-            if cny is not None and ghs is not None:
-                rows.append((date, float(cny), float(ghs)))
-        if rows:
-            return rows
-    if isinstance(data, dict) and isinstance(data.get("rates"), dict):
-        rows = []
-        for date, r in data["rates"].items():
-            if isinstance(r, dict) and r.get("CNY") is not None and r.get("GHS") is not None:
-                rows.append((date[:10], float(r["CNY"]), float(r["GHS"])))
-        if rows:
-            return rows
-    return None
+    if not isinstance(data, dict):
+        return None
+    items = data.get("data")
+    if not isinstance(items, list) or not items:
+        return None
+    out = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        date = str(item.get("date") or "")[:10]
+        rate = item.get("rate")
+        if not date or rate is None:
+            continue
+        try:
+            out[date] = float(rate)
+        except (TypeError, ValueError):
+            continue
+    return out or None
 
 
 def _fetch_history_with_key(key, start, end):
     """
-    用 exchange-rateapi.com 免费 key 回填历史汇率。
-    优先多币种一次请求（target=CNY,GHS）；若响应无法解析，退化为分别请求 CNY / GHS 再按日期合并。
+    用 allratestoday.com 免费 key 回填历史汇率（Bearer 认证）。
+    该服务一次仅支持单个 target，故对 USD/CNY、USD/GHS 各请求一次再按日期合并。
     返回 (是否成功, 摘要文本)。
     """
     headers = {"Authorization": "Bearer " + key, "User-Agent": "Mozilla/5.0"}
-    q = urllib.parse.urlencode({"source": "USD", "target": "CNY,GHS",
-                                "period": "30d"})
-    raw = None
-    try:
-        req = urllib.request.Request(RATE_HISTORY_API + "?" + q, headers=headers)
-        with urllib.request.urlopen(req, timeout=25) as resp:
-            raw = json.loads(resp.read().decode("utf-8"))
-        rows = _parse_history_payload(raw)
-        if rows:
-            n = _write_history_rows(rows, start, end)
-            return n > 0, f"exchange-rateapi.com(多币种) 回填 {n} 天"
-    except Exception as e:
-        raw_err = str(e)
-    # 退化：分币种请求
     merged = {}
-    try:
-        for target in ("CNY", "GHS"):
-            q2 = urllib.parse.urlencode({"source": "USD", "target": target,
-                                         "period": "30d"})
-            req = urllib.request.Request(RATE_HISTORY_API + "?" + q2, headers=headers)
+    errs = []
+    for target in ("CNY", "GHS"):
+        q = urllib.parse.urlencode({"source": "USD", "target": target, "period": "30d"})
+        try:
+            req = urllib.request.Request(RATE_HISTORY_API + "?" + q, headers=headers)
             with urllib.request.urlopen(req, timeout=25) as resp:
-                d = json.loads(resp.read().decode("utf-8"))
-            for date, cny, ghs in (_parse_history_payload(d) or []):
+                data = json.loads(resp.read().decode("utf-8"))
+            parsed = _parse_history_payload(data, target)
+            if not parsed:
+                errs.append(target + ": 响应无法解析 " + str(data)[:100])
+                continue
+            for date, rate in parsed.items():
                 merged.setdefault(date, [None, None])
-                if cny is not None:
-                    merged[date][0] = cny
-                if ghs is not None:
-                    merged[date][1] = ghs
-        if merged:
-            rows = [(dt, v[0], v[1]) for dt, v in sorted(merged.items())]
-            n = _write_history_rows(rows, start, end)
-            return n > 0, f"exchange-rateapi.com(分币种) 回填 {n} 天"
-        return False, "历史接口响应无法解析（请检查 key/额度；原始响应: " + str(raw)[:150] + ")"
-    except Exception as e2:
-        return False, f"历史接口调用失败: {e2}（原始响应: {str(raw)[:120]}）"
+                merged[date][0 if target == "CNY" else 1] = rate
+        except Exception as e:
+            errs.append(target + ": " + str(e))
+    if not merged:
+        return False, "allratestoday.com 历史接口全部失败: " + "; ".join(errs)
+    rows = [(dt, v[0], v[1]) for dt, v in sorted(merged.items())]
+    n = _write_history_rows(rows, start, end)
+    tip = ("（部分币种缺失: " + "; ".join(errs) + "）") if errs else ""
+    return n > 0, ("allratestoday.com 回填 " + str(n) + " 天 " + tip).rstrip()
 
 
 def _fetch_history_cny_frankfurter(start, end):
@@ -402,7 +385,7 @@ def _fetch_history_cny_frankfurter(start, end):
 
 
 def _write_history_rows(rows, start, end):
-    """把 [(date, usd_cny, usd_ghs)] 写入 rates 表（INSERT OR REPLACE，覆盖口径为市场中间价）。"""
+    """把 [(date, usd_cny, usd_ghs)] 写入 rates 表（INSERT OR REPLACE，覆盖口径为市场中间价）。返回写入天数。"""
     conn = get_db()
     n = 0
     for date, cny, ghs in rows:
@@ -415,14 +398,16 @@ def _write_history_rows(rows, start, end):
                      (date, cny, ghs, ghs_cny))
         n += 1
     conn.commit(); conn.close()
-    return n > 0
+    return n
 
 
 def fetch_rates_history(days=30):
     """
     回填最近 days 天历史汇率到 rates 表（多源策略）：
-      1) ai_config.json 配置了 rate_api_key → exchange-rateapi.com（USD/CNY + USD/GHS，市场中间价）
-      2) 无 key → 中国外汇交易中心官方中间价补 USD/CNY（工作日数据，不覆盖已有记录），GHS 跳过
+      1) ai_config.json 配置了 rate_api_key → allratestoday.com（USD/CNY + USD/GHS 市场中间价，
+         含周末日历日序列，Bearer 认证）
+      2) 无 key → 欧洲央行参考汇率 frankfurter.app 补 USD/CNY 历史（仅工作日，不覆盖已有记录），
+         GHS 无 ECB 数据跳过
     返回 (是否成功, 摘要文本)。
     """
     end = datetime.now().strftime("%Y-%m-%d")
