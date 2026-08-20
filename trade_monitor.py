@@ -366,6 +366,42 @@ def pw_check(blob, plain):
     return pw_decrypt(blob) == plain
 
 
+def _push_pw_history(user_id, blob, plain, conn=None):
+    """写入一条历史密码；每个用户仅保留最近 5 条（含本次）。
+
+    conn 传入时复用调用方连接（不单独提交/关闭），否则自建连接并提交。
+    """
+    own = conn is None
+    if own:
+        conn = get_db()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    conn.execute(
+        "INSERT INTO password_history(user_id,pw_blob,pw_plain,changed_at) VALUES(?,?,?,?)",
+        (user_id, blob, plain, now))
+    # 仅保留最近 5 条，删除更早的记录（按 id 升序即时间升序）
+    conn.execute(
+        "DELETE FROM password_history WHERE user_id=? AND id NOT IN "
+        "(SELECT id FROM password_history WHERE user_id=? ORDER BY id DESC LIMIT 5)",
+        (user_id, user_id))
+    if own:
+        conn.commit()
+        conn.close()
+
+
+def _pw_recently_used(user_id, plain):
+    """校验新密码是否与『当前密码 + 最近 5 次历史密码』重复（改密防复用）。"""
+    conn = get_db()
+    u = conn.execute("SELECT pw_blob FROM users WHERE id=?", (user_id,)).fetchone()
+    if u and pw_check(u["pw_blob"], plain):
+        conn.close()
+        return True
+    rows = conn.execute(
+        "SELECT pw_blob FROM password_history WHERE user_id=? ORDER BY id DESC LIMIT 5",
+        (user_id,)).fetchall()
+    conn.close()
+    return any(pw_check(r["pw_blob"], plain) for r in rows)
+
+
 # 后台直接建号默认密码（不走注册流程、由后台插入的账号统一使用 d12345678）
 DEFAULT_BACKEND_PW = "d12345678"
 
@@ -404,10 +440,13 @@ def add_backend_user(account, password=DEFAULT_BACKEND_PW, email="", phone="", u
         return False, "该账号已存在"
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     uname = (username or ("用户" + account[-4:])).strip()
-    conn.execute(
-        "INSERT INTO users(account,username,email,phone,pw_blob,created_at,updated_at) "
-        "VALUES(?,?,?,?,?,?,?)",
-        (account, uname, email or "", phone or "", pw_encrypt(password), now, now))
+    blob = pw_encrypt(password)
+    cur = conn.execute(
+        "INSERT INTO users(account,username,email,phone,pw_blob,pw_plain,created_at,updated_at) "
+        "VALUES(?,?,?,?,?,?,?,?)",
+        (account, uname, email or "", phone or "", blob, password, now, now))
+    uid = cur.lastrowid
+    _push_pw_history(uid, blob, password, conn)   # 初始密码也纳入历史（最近 5 次）
     conn.commit()
     conn.close()
     return True, "已创建账号 %s（默认密码 %s）" % (account, password)
@@ -681,6 +720,15 @@ def get_db():
             expires_at  TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_vc_key ON verify_codes(key, purpose);
+        -- 密码历史：每个用户仅保留最近 5 次用过的密码（改密时验证身份 / 防复用）
+        CREATE TABLE IF NOT EXISTS password_history (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id     INTEGER,                     -- 关联 users.id
+            pw_blob     TEXT,                        -- 历史密码密文（两级可逆）
+            pw_plain    TEXT,                         -- 历史原始密码（仅记录备查）
+            changed_at  TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_ph_user ON password_history(user_id, id);
     """)
     # 字段迁移：商品展示图、AI 图像校验结果（兼容旧库）
     for col_sql in (
@@ -691,11 +739,22 @@ def get_db():
         "ALTER TABLE goods ADD COLUMN unit_volume REAL DEFAULT 0",
         "ALTER TABLE goods ADD COLUMN hs_code TEXT DEFAULT ''",
         "ALTER TABLE goods ADD COLUMN tariff_rate REAL DEFAULT -1",
+        # 用户表新增原始密码字段（兼容旧库）
+        "ALTER TABLE users ADD COLUMN pw_plain TEXT",
     ):
         try:
             conn.execute(col_sql)
         except sqlite3.OperationalError:
             pass
+    # 历史库兼容：为已存在但未记录原始密码的用户回填（密文可逆，可安全还原）
+    try:
+        for row in conn.execute("SELECT id, pw_blob FROM users WHERE pw_plain IS NULL"):
+            p = pw_decrypt(row["pw_blob"])
+            if p is not None:
+                conn.execute("UPDATE users SET pw_plain=? WHERE id=?", (p, row["id"]))
+        conn.commit()
+    except Exception:
+        pass
     return conn
 
 
@@ -3517,13 +3576,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
             conn.close()
             return self._send(409, {"error": "该手机号已被注册"})
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        blob = pw_encrypt(password)
         cur = conn.execute(
-            "INSERT INTO users(account,username,email,phone,pw_blob,created_at,updated_at) "
-            "VALUES(?,?,?,?,?,?,?)",
-            (account, username, email, phone, pw_encrypt(password), now, now))
+            "INSERT INTO users(account,username,email,phone,pw_blob,pw_plain,created_at,updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            (account, username, email, phone, blob, password, now, now))
         uid = cur.lastrowid
         conn.commit()
         conn.close()
+        _push_pw_history(uid, blob, password)   # 注册密码即历史第 1 条
         token = _create_session(uid)
         self._send(200, {"ok": True, "account": account, "user": _user_public({
             "id": uid, "account": account, "username": username, "email": email,
@@ -3571,9 +3632,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
             fields["phone"] = ph
         if body.get("password"):
             pw = body["password"] or ""
+            old = body.get("old_password") or ""
             if len(pw) < 8 or not re.search(r"[A-Za-z]", pw) or not re.search(r"\d", pw):
                 conn.close(); return self._send(400, {"error": "密码至少 8 位，且同时包含字母和数字"})
+            # 验证身份：修改密码必须提供当前密码（与加密密文比对，不使用原始密码校验）
+            if not pw_check(u["pw_blob"], old):
+                conn.close(); return self._send(401, {"error": "当前密码错误，身份验证失败"})
+            # 防复用：新密码不能与『当前 + 最近 5 次』用过的密码重复
+            if _pw_recently_used(u["id"], pw):
+                conn.close(); return self._send(400, {"error": "新密码不能与前 5 次使用过的密码相同"})
+            # 旧密码滚入历史（最近 5 条），随后更新当前密码
+            old_plain = u.get("pw_plain") or pw_decrypt(u["pw_blob"]) or ""
+            _push_pw_history(u["id"], u["pw_blob"], old_plain, conn)
             fields["pw_blob"] = pw_encrypt(pw)
+            fields["pw_plain"] = pw          # 原始密码仅记录备查
         if not fields:
             conn.close(); return self._send(400, {"error": "没有需要更新的内容"})
         fields["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
