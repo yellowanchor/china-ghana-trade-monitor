@@ -21,6 +21,11 @@
 <link rel="stylesheet" href="/vendor/iconfont/iconfont.css">
 </head>
 <body>
+<!-- 真实 4K 风景背景层（本地托管，离线可用；JS 注入交叉淡入） -->
+<div class="bg-stage" id="bgStage">
+  <div class="bg-overlay"></div>
+</div>
+
 <div id="auth" class="auth-card">
   <div class="auth-head">
     <span class="logo"><span class="iconfont icon-globe2"></span></span>
@@ -33,6 +38,11 @@
   <div class="tabs">
     <button :class="{active: tab==='login'}" @click="tab='login'">登录</button>
     <button :class="{active: tab==='register'}" @click="tab='register'">注册</button>
+  </div>
+
+  <!-- 人机验证（防机器人）：配置 Turnstile 后显示验证框 -->
+  <div v-if="captchaSiteKey" class="cf-wrap">
+    <div id="cf-captcha" class="cf-turnstile" :data-sitekey="captchaSiteKey"></div>
   </div>
 
   <!-- 登录 -->
@@ -86,7 +96,7 @@
 
   <div v-if="msg" class="msg" :class="msgType">{{ msg }}</div>
 
-  <div class="hint">受密码两级可逆加密保护 · 验证码接口已预留邮箱(Resend/Brevo/SMTP)与短信(阿里云/腾讯云)</div>
+  <div class="hint">受密码两级可逆加密保护 · 人机验证接入 Cloudflare Turnstile（免费）· 验证码接口已预留邮箱/短信</div>
 </div>
 
 <script src="/vendor/vue.global.prod.js"></script>

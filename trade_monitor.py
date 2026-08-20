@@ -253,6 +253,16 @@ AI_CONFIG_TEMPLATE = {
         "app_id": "", "private_key": "", "public_key": "",
         "endpoint": "https://openapi.alipay.com/gateway.do",
     },
+    # 人机验证（防机器人 / 抗暴力破解）—— 采用 Cloudflare Turnstile（免费、无用量计费、
+    # 无可见拼图、隐私友好，是目前最易用的免费方案）。备选：hCaptcha、Google reCAPTCHA v3。
+    # site_key 与 secret 留空 → 进入 dev 放行模式（本地联调无需注册即可用）；填入后自动
+    # 接入真实人机校验，登录/注册/获取验证码均需先通过验证。
+    #   申请：https://dash.cloudflare.com/ → Turnstile → 添加站点（域名填 localhost 亦可）
+    "captcha": {
+        "provider": "turnstile",   # turnstile | hcaptcha | recaptcha（当前仅实现 turnstile 校验）
+        "site_key": "",            # 前端渲染验证框用
+        "secret": "",              # 服务端校验用（务必保密，勿外泄）
+    },
 }
 
 # 最近一次成功调用实际使用的模型名（多通道容灾后用于日报署名）
@@ -3341,12 +3351,47 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def _cookie_header(self, token, max_age=SESSION_TTL_DAYS * 86400):
         return "tm_sid=%s; Path=/; Max-Age=%d; HttpOnly; SameSite=Lax" % (token, max_age)
 
+    def _verify_captcha(self, token):
+        """校验人机验证令牌（Cloudflare Turnstile）。
+
+        未配置 site_key/secret 时视为 dev 模式，直接放行（本地联调无需注册）。
+        配置后向 Turnstile 服务端校验站点密钥，成功才放行。
+        返回 (ok: bool, reason: str)。
+        """
+        cfg = load_ai_config().get("captcha") or {}
+        sk = (cfg.get("site_key") or "").strip()
+        secret = (cfg.get("secret") or "").strip()
+        if not sk or not secret:
+            return True, "dev"
+        if not token:
+            return False, "missing token"
+        try:
+            data = urllib.parse.urlencode({
+                "secret": secret,
+                "response": token,
+                "remoteip": self.client_address[0],
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+                data=data,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                method="POST")
+            resp = json.loads(urllib.request.urlopen(req, timeout=10).read())
+            ok = bool(resp.get("success"))
+            return ok, ("ok" if ok else "failed")
+        except Exception as e:
+            return False, "verify error: %s" % e
+
     def _auth_get(self, path):
         if path == "/api/auth/me":
             u = self.current_user()
             if not u:
                 return self._send(401, {"error": "unauthorized", "login": True})
             return self._send(200, _user_public(u))
+        if path == "/api/auth/captcha-config":
+            cfg = load_ai_config().get("captcha") or {}
+            return self._send(200, {"provider": cfg.get("provider", "turnstile"),
+                                    "site_key": cfg.get("site_key", "")})
         return self._send(404, {"error": "not found"})
 
     def _auth_post(self, path):
@@ -3371,6 +3416,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
         return self._send(404, {"error": "not found"})
 
     def _auth_send_code(self, body):
+        # 人机验证（防短信/邮件轰炸）：dev 模式（未配置 Turnstile）自动放行
+        ok, why = self._verify_captcha(body.get("captcha"))
+        if not ok:
+            return self._send(400, {"error": "请先完成人机验证", "captcha": True})
         channel = (body.get("channel") or "email").strip().lower()
         target = (body.get("target") or "").strip()
         purpose = (body.get("purpose") or "register").strip()
@@ -3390,6 +3439,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
         return self._send(200, resp)
 
     def _auth_register(self, body):
+        # 人机验证（防机器人批量注册）：dev 模式自动放行
+        ok, why = self._verify_captcha(body.get("captcha"))
+        if not ok:
+            return self._send(400, {"error": "请先完成人机验证", "captcha": True})
         account = (body.get("account") or "").strip()
         username = (body.get("username") or "").strip()
         email = (body.get("email") or "").strip()
@@ -3434,6 +3487,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
             headers={"Set-Cookie": self._cookie_header(token)})
 
     def _auth_login(self, body):
+        # 人机验证（防暴力破解）：dev 模式自动放行
+        ok, why = self._verify_captcha(body.get("captcha"))
+        if not ok:
+            return self._send(400, {"error": "请先完成人机验证", "captcha": True})
         account = (body.get("account") or "").strip()
         password = body.get("password") or ""
         conn = get_db()

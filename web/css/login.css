@@ -39,19 +39,60 @@ html, body { margin: 0; height: 100%; }
 body {
   font-family: var(--font);
   color: var(--text);
-  background-image: url("/login-bg.svg");
-  background-size: cover;
-  background-position: center;
-  background-attachment: fixed;
+  background: #0b1020; /* 图片加载前的兜底底色 */
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 20px;
-  transition: background-color 0.25s ease, color 0.25s ease;
+  overflow: hidden;
+  transition: color 0.25s ease;
+}
+
+/* ===== 真实 4K 风景背景层（本地托管，离线可用）===== */
+.bg-stage {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  /* 背景整体的过渡（焦点模糊时平滑） */
+  transition: filter 0.45s ease, transform 0.6s ease;
+  will-change: filter;
+}
+.bg-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transform: scale(1.04);
+  transition: opacity 1.4s ease, transform 8s ease;
+  will-change: opacity, transform;
+}
+.bg-img.active { opacity: 1; }
+.bg-overlay {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(120% 120% at 50% 28%,
+              rgba(0, 0, 0, 0.08), rgba(0, 0, 0, 0.42));
+  transition: background 0.45s ease;
+}
+
+/* ===== 焦点态：鼠标/键盘聚焦中间模块时，背景虚化 + 卡片放大 ===== */
+body.bg-focus .bg-stage {
+  filter: blur(14px) brightness(0.60) saturate(1.18);
+  transform: scale(1.05);
+}
+body.bg-focus .bg-img.active { transform: scale(1.10); }
+body.bg-focus .bg-overlay {
+  background: radial-gradient(120% 120% at 50% 28%,
+              rgba(0, 0, 0, 0.18), rgba(0, 0, 0, 0.58));
 }
 
 /* 毛玻璃卡片 */
 .auth-card {
+  position: relative;
+  z-index: 1;
   width: 420px;
   max-width: 100%;
   padding: 34px 34px 30px;
@@ -61,7 +102,18 @@ body {
   box-shadow: var(--shadow);
   backdrop-filter: saturate(180%) blur(22px);
   -webkit-backdrop-filter: saturate(180%) blur(22px);
+  /* 焦点放大过渡 */
+  transition: transform 0.40s cubic-bezier(.2, .8, .2, 1), box-shadow 0.40s ease,
+              border-color 0.3s ease;
 }
+body.bg-focus .auth-card {
+  transform: scale(1.045);
+  box-shadow: 0 32px 90px rgba(0, 0, 0, 0.55);
+}
+
+/* 人机验证容器 */
+.cf-wrap { margin: 2px 0 8px; display: flex; }
+.cf-turnstile { transform-origin: left center; }
 .auth-head { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
 .auth-head .logo {
   width: 40px; height: 40px; border-radius: 11px;
