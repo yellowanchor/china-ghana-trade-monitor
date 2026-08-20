@@ -1375,22 +1375,20 @@ The Seller agrees to sell and the Buyer agrees to purchase the following goods
 on the terms and conditions set forth below:
 
 ARTICLE 1 - COMMODITY & SPECIFICATION
-+---+-------------------+-------+----------+----------+----------+
-| # | Description       | HS    | Qty      | Unit Price| Amount   |
-|   |                   | Code  | (pcs)    | (USD)     | (USD)    |
-+---+-------------------+-------+----------+----------+----------+
-| 1 | _______________   | _____ | _______  | ________  | _______  |
-| 2 | _______________   | _____ | _______  | ________  | _______  |
-|   | Total:            |       |          |           | _______  |
-+---+-------------------+-------+----------+----------+----------+
+
+| # | Description | HS Code | Qty (pcs) | Unit Price (USD) | Amount (USD) |
+|---|-------------|---------|-----------|------------------|--------------|
+| 1 |             |         |           |                  |              |
+| 2 |             |         |           |                  |              |
+| Total |        |         |           |                  |              |
 
 ARTICLE 2 - COUNTRY OF ORIGIN & QUALITY
 Country of Origin: People's Republic of China.
 Quality: as per Seller's specifications and samples approved by Buyer.
 
 ARTICLE 3 - TOTAL VALUE
-Total Contract Value: USD ____________ (Say U.S. Dollars ______________ only)
-* All prices are in USD. This is a firm commitment, not subject to FX revaluation.
+Total Contract Value: USD ____________ (Say U.S. Dollars ______________ only).
+All prices are in USD. This is a firm commitment, not subject to FX revaluation.
 
 ARTICLE 4 - TRADE TERMS
 [ ] FOB Chongqing / Shenzhen, China (Incoterms 2020)
@@ -1404,14 +1402,14 @@ ARTICLE 6 - PORT OF LOADING & DISCHARGE
 Port of Loading: Chongqing / Shenzhen, China
 Port of Discharge: Tema Port, Ghana
 
-ARTICLE 7 - PAYMENT TERMS *** CRITICAL ***
+ARTICLE 7 - PAYMENT TERMS
 Payment shall be made by Telegraphic Transfer (T/T) as follows:
   1) 30% of total contract value as advance payment (deposit)
      within ___ working days after contract signing;
   2) 70% balance payment before shipment (before Bill of Lading date).
      The Seller shall NOT release the cargo / telex-release the B/L
-     until 100% payment is received.
-* No cargo release without full payment. B/L = title of goods.
+     until 100% payment is received. No cargo release without full
+     payment; the B/L is the title of goods.
 
 ARTICLE 8 - COMPLIANCE & CERTIFICATION
 The Seller shall provide:
@@ -1473,21 +1471,20 @@ CONTRACT_TEMPLATE_ZH = """销售合同
 买卖双方同意按下列条款和条件进行交易：
 
 第一条 商品及规格
-+----+--------------+--------+---------+----------+----------+
-| 序号 | 品名及规格  | 海关编码 | 数量(件) | 单价(美元) | 金额(美元) |
-+----+--------------+--------+---------+----------+----------+
-| 1  | ____________ | ______ | _______ | ________ | ________ |
-| 2  | ____________ | ______ | _______ | ________ | ________ |
-|    | 合计：       |        |         |          | ________ |
-+----+--------------+--------+---------+----------+----------+
+
+| 序号 | 品名及规格 | 海关编码 | 数量（件） | 单价（美元） | 金额（美元） |
+|------|-----------|---------|-----------|-------------|-------------|
+| 1 |           |         |           |             |             |
+| 2 |           |         |           |             |             |
+| 合计 |          |         |           |             |             |
 
 第二条 原产地及质量
 原产地：中华人民共和国。
 质量标准：以买方认可的卖方规格及样品为准。
 
 第三条 合同总金额
-合同总金额：美元 ____________（大写：______________________ 整）
-* 本合同所有价格均以美元（USD）计价，为固定价格，不随汇率波动调整。
+合同总金额：美元 ____________（大写：______________________ 整）。
+本合同所有价格均以美元（USD）计价，为固定价格，不随汇率波动调整。
 
 第四条 贸易术语
 [ ] FOB 中国重庆/深圳（国际贸易术语解释通则 Incoterms 2020）
@@ -1501,12 +1498,12 @@ CONTRACT_TEMPLATE_ZH = """销售合同
 装运港：中国重庆/深圳
 目的港：加纳特马港（Tema Port, Ghana）
 
-第七条 付款条件 *** 重点条款 ***
+第七条 付款条件
 货款以电汇（T/T）方式支付：
   1) 合同签订后___个工作日内，支付合同总金额的 30% 作为定金；
   2) 余款 70% 于发货前（提单签发日前）付清。
-  卖方在收到 100% 货款之前，不得放货、不得电放提单。
-* 款未付清一律不放货。提单（B/L）即货权凭证。
+  卖方在收到 100% 货款之前，不得放货、不得电放提单；
+  款未付清一律不放货，提单（B/L）即货权凭证。
 
 第八条 合规与认证
 卖方须提供以下单证：
@@ -1567,13 +1564,12 @@ CONTRACT_PURCHASE_ZH = """采购合同
 供需双方同意按下列条款和条件进行交易：
 
 第一条 采购标的
-+----+--------------+--------+---------+----------+----------+
-| 序号 | 品名及规格  | 型号   | 数量    | 单价(元)  | 金额(元)  |
-+----+--------------+--------+---------+----------+----------+
-| 1  | ____________ | ______ | _______ | ________ | ________ |
-| 2  | ____________ | ______ | _______ | ________ | ________ |
-|    | 合计：       |        |         |          | ________ |
-+----+--------------+--------+---------+----------+----------+
+
+| 序号 | 品名及规格 | 型号 | 数量 | 单价（元） | 金额（元） |
+|------|-----------|------|------|-----------|-----------|
+| 1 |           |      |      |           |           |
+| 2 |           |      |      |           |           |
+| 合计 |          |      |      |           |           |
 
 第二条 质量标准
 符合国家标准 GB/__________ 及双方确认的样品/图纸；供方须随货提供出厂检验报告。
@@ -1591,7 +1587,7 @@ CONTRACT_PURCHASE_ZH = """采购合同
 第六条 包装
 出口标准纸箱/木箱包装，适合集装箱海运；唛头按需方要求刷制。
 
-第七条 付款条件 *** 重点条款 ***
+第七条 付款条件
 1) 签约后 ___ 日内支付 30% 预付款；
 2) 验收合格且收到全额增值税专用发票后支付 70% 余款。
 
@@ -1628,14 +1624,12 @@ The Purchaser agrees to purchase and the Supplier agrees to supply the
 following goods on the terms and conditions set forth below:
 
 ARTICLE 1 - GOODS
-+---+-------------------+--------+----------+-----------+----------+
-| # | Description       | Model  | Qty      | Unit Price| Amount   |
-|   |                   |        |          | (RMB)     | (RMB)    |
-+---+-------------------+--------+----------+-----------+----------+
-| 1 | _______________   | ______ | _______  | ________  | _______  |
-| 2 | _______________   | ______ | _______  | ________  | _______  |
-|   | Total:            |        |          |           | _______  |
-+---+-------------------+--------+----------+-----------+----------+
+
+| # | Description | Model | Qty | Unit Price (RMB) | Amount (RMB) |
+|---|-------------|-------|-----|------------------|--------------|
+| 1 |             |       |     |                  |              |
+| 2 |             |       |     |                  |              |
+| Total |        |       |     |                  |              |
 
 ARTICLE 2 - QUALITY
 The goods shall conform to Chinese National Standard GB/__________ and the
@@ -1660,7 +1654,7 @@ ARTICLE 6 - PACKING
 Export-standard cartons / wooden crates suitable for container sea
 transport; shipping marks as directed by the Purchaser.
 
-ARTICLE 7 - PAYMENT TERMS *** CRITICAL ***
+ARTICLE 7 - PAYMENT TERMS
 1) 30% advance payment within ___ days after signing;
 2) 70% balance after the goods pass acceptance and the Supplier issues
    the full-amount special VAT invoice.
@@ -1704,7 +1698,7 @@ CONTRACT_AGENCY_ZH = """独家经销与代理协议
 乙方年度销售任务：不低于 ______ 美元（或 ______ 台/套）。
 连续两个季度未完成任务 60% 的，甲方有权调整授权范围或终止本协议。
 
-第三条 价格与结算 *** 重点条款 ***
+第三条 价格与结算
 1. 供货价：USD ______（FOB 中国港口 / CIF 加纳特马港，Incoterms 2020）。
 2. 结算方式：乙方以电汇（T/T）预付 100% 货款至甲方对公账户后，
    甲方再安排发货；款未付清一律不放货。
@@ -1765,7 +1759,7 @@ Party B's annual sales target: no less than USD ________ (or ______
 units). If the target is below 60% for two consecutive quarters, Party A
 may adjust the territory or terminate this Agreement.
 
-ARTICLE 3 - PRICING & SETTLEMENT *** CRITICAL ***
+ARTICLE 3 - PRICING & SETTLEMENT
 1. Supply price: USD ________ (FOB Chinese port / CIF Tema Port,
    Incoterms 2020).
 2. Payment: Party B pays 100% of the goods value in advance by T/T to
@@ -1832,7 +1826,7 @@ CONTRACT_FREIGHT_ZH = """国际货运代理协议
   [ ] 单证代办（商业发票、装箱单、原产地证 CO、符合性证书 COC）
   [ ] 目的港清关协助与门到门派送
 
-第二条 费用与结算 *** 重点条款 ***
+第二条 费用与结算
 1. 费用标准见附件《运价表》；运价随市场波动调整的，
    乙方须提前 ___ 个工作日书面通知甲方。
 2. 结算方式：【 】预付 /【 】月结（次月 ___ 日前对账并付清）。
@@ -1882,7 +1876,7 @@ Tema Port, Ghana, covering:
       Origin CO, Certificate of Conformity CoC)
   [ ] Destination clearance assistance & door-to-door delivery
 
-ARTICLE 2 - CHARGES & SETTLEMENT *** CRITICAL ***
+ARTICLE 2 - CHARGES & SETTLEMENT
 1. Charges as per the attached Rate Schedule; any market-driven rate
    adjustment shall be notified to Party A ___ working days in advance
    in writing.
@@ -2344,20 +2338,32 @@ try:
     from reportlab.lib.units import mm
     from reportlab.lib.styles import ParagraphStyle
     from reportlab.lib.enums import TA_CENTER
+    from reportlab.lib import colors
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.cidfonts import UnicodeCIDFont
     from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer,
-                                    Preformatted)
+                                    Preformatted, Table, TableStyle,
+                                    HRFlowable)
     _HAS_REPORTLAB = True
 except ImportError:
     _HAS_REPORTLAB = False
 
 
+# 条款标题识别：中文「第X条」/ 英文「ARTICLE N」
+_CONTRACT_HEAD_RE = re.compile(r"^(第[一二三四五六七八九十百零]+条|ARTICLE\s+\d+)")
+# 含 CJK（汉字/中文标点/全角符号）的行用宋体，纯西文行用 Helvetica
+_CJK_RE = re.compile(r"[\u2e80-\u9fff\u3000-\u303f\uff00-\uffef]")
+
+
 def contract_to_pdf(title, content, lang="zh"):
     """
-    把合同文本排版为 A4 PDF，返回 bytes。
-    中文用 CID 内置字体 STSong-Light（无需字体文件，PDF 阅读器自带 CJK 支持）；
-    纯 ASCII 行（表格边框线等）用 Courier 等宽字体保持对齐。
+    把合同文本排版为标准 A4 合同 PDF，返回 bytes。排版规则：
+    - 正文首个非空行（如「销售合同」/SALES CONTRACT）作为文档大标题，居中 + 下划粗线；
+    - 竖线表格行（| a | b |）渲染为带网格线的规则表格，首行为表头（浅灰底、居中）；
+    - 「第X条」/「ARTICLE N」条款标题单独分级（加大字号 + 段前段后间距）；
+    - 中文行用 CID 内置字体 STSong-Light（无需字体文件），纯西文行用 Helvetica；
+    - 连续空格转为不换行空格，保住签字栏等左右分栏对齐；
+    - 页脚居中显示页码。
     依赖 reportlab（可选）：未安装时抛 RuntimeError 并给出安装指引。
     """
     if not _HAS_REPORTLAB:
@@ -2366,38 +2372,120 @@ def contract_to_pdf(title, content, lang="zh"):
 
     pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
 
-    st_title = ParagraphStyle("title", fontName="STSong-Light", fontSize=16,
-                              leading=22, alignment=TA_CENTER, spaceAfter=6)
-    st_sub = ParagraphStyle("sub", fontName="STSong-Light", fontSize=9,
-                            leading=13, alignment=TA_CENTER, textColor="#888888",
-                            spaceAfter=14)
+    st_title = ParagraphStyle("title", fontName="STSong-Light", fontSize=20,
+                              leading=28, alignment=TA_CENTER, spaceAfter=8)
+    st_h_cn = ParagraphStyle("h_cn", fontName="STSong-Light", fontSize=12,
+                             leading=18, spaceBefore=10, spaceAfter=4)
+    st_h_en = ParagraphStyle("h_en", fontName="Helvetica", fontSize=12,
+                             leading=18, spaceBefore=10, spaceAfter=4)
     st_cn = ParagraphStyle("cn", fontName="STSong-Light", fontSize=10.5,
-                           leading=16.5)
+                           leading=17, spaceAfter=2)
+    st_en = ParagraphStyle("en", fontName="Helvetica", fontSize=10.5,
+                           leading=16, spaceAfter=2)
     st_ascii = ParagraphStyle("ascii", fontName="Courier", fontSize=9,
                               leading=12.5)
+    st_cell = ParagraphStyle("cell", fontName="STSong-Light", fontSize=9.5,
+                             leading=13)
+    st_cell_h = ParagraphStyle("cell_h", fontName="STSong-Light", fontSize=9.5,
+                               leading=13, alignment=TA_CENTER)
 
     def esc(s):
-        return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+        s = (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+        # 连续空格（>=2）转不换行空格，保住签字栏对齐排版
+        return re.sub(r"  +", lambda m: "&#160;" * len(m.group()), s)
 
-    story = [Paragraph(esc(title or "SALES CONTRACT"), st_title),
-             Paragraph("China-Ghana Trade Monitor", st_sub), Spacer(1, 2)]
-    for line in (content or "").splitlines():
-        line = line.rstrip()
-        if not line:
-            story.append(Spacer(1, 5))
-        elif line.isascii():
-            # 纯 ASCII 行（表格、下划线填空）用等宽字体，保持排版对齐
+    def body_style(line):
+        return st_cn if _CJK_RE.search(line) else st_en
+
+    def head_style(line):
+        return st_h_cn if _CJK_RE.search(line) else st_h_en
+
+    def build_table(block):
+        """竖线表格行块 → reportlab 规则表格（网格线 + 表头底纹）。"""
+        rows = []
+        for ln in block:
+            cells = [c.strip() for c in ln.strip().strip("|").split("|")]
+            if cells and all(c and set(c) <= set("-: ") for c in cells):
+                continue  # 分隔行 |---|---|
+            rows.append(cells)
+        if not rows:
+            return None
+        ncols = max(len(r) for r in rows)
+        data = []
+        for ri, r in enumerate(rows):
+            r = r + [""] * (ncols - len(r))
+            stl = st_cell_h if ri == 0 else st_cell
+            data.append([Paragraph(esc(c) or "&#160;", stl) for c in r])
+        t = Table(data, hAlign="CENTER", repeatRows=1)
+        t.setStyle(TableStyle([
+            ("GRID", (0, 0), (-1, -1), 0.6, colors.HexColor("#444444")),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#efefef")),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING", (0, 0), (-1, -1), 3.5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3.5),
+            ("LEFTPADDING", (0, 0), (-1, -1), 4),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ]))
+        return t
+
+    lines = [l.rstrip() for l in (content or "").splitlines()]
+
+    # 文档标题 = 正文首个非空行；正文从其后开始
+    doc_title, start = (title or "CONTRACT").strip(), 0
+    for i, l in enumerate(lines):
+        if l.strip():
+            doc_title = l.strip()
+            start = i + 1
+            break
+
+    story = [Paragraph(esc(doc_title), st_title),
+             HRFlowable(width="100%", thickness=1.4,
+                        color=colors.HexColor("#222222"), spaceAfter=12)]
+
+    i, n = start, len(lines)
+    while i < n:
+        line = lines[i]
+        s = line.strip()
+        if not s:
+            story.append(Spacer(1, 4))
+            i += 1
+        elif s.startswith("|"):
+            block = []
+            while i < n and lines[i].strip().startswith("|"):
+                block.append(lines[i])
+                i += 1
+            tbl = build_table(block)
+            if tbl:
+                story.append(tbl)
+                story.append(Spacer(1, 6))
+            else:
+                i += 1
+        elif _CONTRACT_HEAD_RE.match(s):
+            story.append(Paragraph(esc(s), head_style(s)))
+            i += 1
+        elif s and set(s) <= set("+-=_ |."):
+            # 残留的手工框线/下划线行（旧版模板或外部粘贴）保持等宽对齐
             story.append(Preformatted(line, st_ascii))
+            i += 1
         else:
-            story.append(Paragraph(esc(line), st_cn))
+            story.append(Paragraph(esc(s), body_style(s)))
+            i += 1
+
+    def _footer(canvas, doc):
+        canvas.saveState()
+        canvas.setFont("STSong-Light", 8)
+        canvas.setFillColor(colors.HexColor("#999999"))
+        canvas.drawCentredString(A4[0] / 2, 8 * mm,
+                                 "- %d -  China-Ghana Trade Monitor" % doc.page)
+        canvas.restoreState()
 
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
         buf, pagesize=A4,
         leftMargin=18 * mm, rightMargin=18 * mm,
-        topMargin=16 * mm, bottomMargin=16 * mm,
+        topMargin=18 * mm, bottomMargin=20 * mm,
         title=title or "Contract", author="China-Ghana Trade Monitor")
-    doc.build(story)
+    doc.build(story, onFirstPage=_footer, onLaterPages=_footer)
     return buf.getvalue()
 
 def save_quote(name, items, params, result, note=""):
