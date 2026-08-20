@@ -438,3 +438,52 @@ html, body {
   margin: 3px 0 0;
 }
 .kb-section dd b { color: var(--red); }
+
+/* ===== 合同审核模块 ===== */
+.contract-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.contract-editor textarea {
+  font-family: 'Cascadia Code', 'Consolas', monospace !important;
+}
+.contract-result {
+  display: flex;
+  flex-direction: column;
+}
+.risk-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-left: 4px solid var(--border);
+  background: #fafafc;
+  border-radius: 8px;
+  margin-bottom: 14px;
+}
+.risk-label {
+  font-size: 16px;
+  font-weight: 700;
+}
+.contract-review-md {
+  max-height: 520px;
+  overflow-y: auto;
+  padding-right: 6px;
+  line-height: 1.75;
+}
+.contract-review-md h3 { font-size: 14px; margin: 12px 0 6px; color: var(--text); }
+.contract-review-md p { margin: 5px 0; }
+.contract-review-md ul { margin: 5px 0; padding-left: 18px; }
+.contract-review-md li { margin: 3px 0; line-height: 1.7; }
+.contract-review-md blockquote { margin: 8px 0; }
+
+/* ===== 旋转动画（审核中）===== */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ===== 窄屏：合同审核降为单列 ===== */
+@media (max-width: 900px) {
+  .contract-layout { grid-template-columns: 1fr !important; }
+}

@@ -357,6 +357,16 @@ def get_db():
         );
         CREATE INDEX IF NOT EXISTS idx_vs_kw ON vision_samples(keyword);
         CREATE INDEX IF NOT EXISTS idx_vs_label ON vision_samples(label);
+        CREATE TABLE IF NOT EXISTS contracts (       -- 合同审核记录
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            title       TEXT,                         -- 合同标题
+            content     TEXT,                         -- 合同原文
+            review_result TEXT,                       -- AI审核结果（Markdown）
+            engine      TEXT,                        -- 使用的AI引擎
+            risk_level  TEXT,                        -- 风险等级：low/medium/high
+            risk_score  INTEGER,                     -- 风险扣分（越高越危险）
+            created_at  TEXT
+        );
     """)
     # 字段迁移：商品展示图、AI 图像校验结果（兼容旧库）
     for col_sql in (
@@ -1343,8 +1353,389 @@ def ask_ai(question):
 
 
 # ==============================================================================
-# 六·B、报价单管理（保存/加载/列表）+ AI 报价预测对比
+# 六·C、合同审核模块（AI 审合同，默认优先 DeepSeek）
 # ==============================================================================
+
+CONTRACT_TEMPLATE = """SALES CONTRACT
+销售合同
+
+Contract No.: _____________        Date: _____________
+
+THIS CONTRACT is made and entered into by and between:
+
+SELLER (卖方): _________________________
+Address: ____________________________________
+Tel: _____________  Email: _____________
+
+BUYER (买方): _________________________
+Address: ____________________________________
+Tel: _____________  Email: _____________
+
+The Seller agrees to sell and the Buyer agrees to purchase the following goods
+on the terms and conditions set forth below:
+
+ARTICLE 1 - COMMODITY & SPECIFICATION (商品规格)
++---+-------------------+-------+----------+----------+----------+
+| # | Description       | HS    | Qty      | Unit Price| Amount   |
+|   |                   | Code  | (pcs)    | (USD)     | (USD)    |
++---+-------------------+-------+----------+----------+----------+
+| 1 | _______________   | _____ | _______  | ________  | _______  |
+| 2 | _______________   | _____ | _______  | ________  | _______  |
+|   | Total:            |       |          |           | _______  |
++---+-------------------+-------+----------+----------+----------+
+
+ARTICLE 2 - COUNTRY OF ORIGIN & QUALITY (原产地及质量)
+Country of Origin: People's Republic of China (中国)
+Quality: as per Seller's specifications and samples approved by Buyer.
+
+ARTICLE 3 - TOTAL VALUE (合同总金额)
+Total Contract Value: USD ____________ (Say U.S. Dollars ______________ only)
+* All prices are in USD. This is a firm commitment, not subject to FX revaluation.
+
+ARTICLE 4 - TRADE TERMS (贸易术语)
+[ ] FOB Chongqing / Shenzhen, China (Incoterms 2020)
+[ ] CIF Tema Port, Ghana (Incoterms 2020)
+
+ARTICLE 5 - PACKING & SHIPPING MARKS (包装及唛头)
+Packing: export-standard cartons, suitable for long-distance sea transport.
+Shipping Marks: as directed by Buyer, marked on each carton.
+
+ARTICLE 6 - PORT OF LOADING & DISCHARGE (装卸港)
+Port of Loading: Chongqing / Shenzhen, China
+Port of Discharge: Tema Port, Ghana
+
+ARTICLE 7 - PAYMENT TERMS (付款条件) *** CRITICAL ***
+Payment shall be made by Telegraphic Transfer (T/T) as follows:
+  1) 30% of total contract value as advance payment (deposit)
+     within ___ working days after contract signing;
+  2) 70% balance payment before shipment (before Bill of Lading date).
+     The Seller shall NOT release the cargo / telex-release the B/L
+     until 100% payment is received.
+* No cargo release without full payment. B/L = title of goods.
+
+ARTICLE 8 - COMPLIANCE & CERTIFICATION (合规与认证)
+The Seller shall provide:
+  [ ] Certificate of Conformity (CoC) for Ghana Customs clearance;
+  [ ] Commercial Invoice (3 originals);
+  [ ] Packing List (3 originals);
+  [ ] Bill of Lading (3 originals or telex-release);
+  [ ] Certificate of Origin (CO).
+CoC cost is borne by: [ ] Seller  [ ] Buyer
+
+ARTICLE 9 - DELIVERY SCHEDULE (交货期)
+Shipment within ___ working days after receipt of advance payment.
+Transit time (China to Tema): approximately 35-45 days by sea.
+
+ARTICLE 10 - INSPECTION (检验)
+Buyer or its representative may inspect the goods at the loading port
+before shipment. The inspection cost is borne by the Buyer.
+
+ARTICLE 11 - FORCE MAJEURE (不可抗力)
+Neither party shall be liable for failure to perform obligations due to
+force majeure events (natural disasters, war, strikes, government actions,
+epidemics). The affected party shall notify the other within 7 days and
+provide supporting documents within 30 days.
+
+ARTICLE 12 - DISPUTE RESOLUTION (争议解决)
+All disputes arising from this contract shall be settled through friendly
+negotiation. If no settlement is reached within 60 days, the dispute shall
+be submitted to arbitration in ____________ (e.g., CIETAC Beijing).
+The arbitration award shall be final and binding on both parties.
+Applicable law: laws of the People's Republic of China.
+
+ARTICLE 13 - MISCELLANEOUS (其他)
+1. This contract is made in both Chinese and English, both versions equally
+   authentic. In case of discrepancy, the English version prevails.
+2. Any amendment must be in writing and signed by both parties.
+3. This contract becomes effective upon signing by both parties.
+
+SELLER (卖方):                          BUYER (买方):
+
+Authorized Signature:                   Authorized Signature:
+Name / Title:                           Name / Title:
+Date:                                   Date:
+"""
+
+
+CONTRACT_REVIEW_SYSTEM = """你是一名资深国际贸易合同审核专家，擅长审核中国对非洲（特别是加纳）出口贸易合同。
+你的任务是审核用户提供的合同文本，找出风险条款和缺失条款，给出修改建议。
+
+审核标准（四条经营红线，任何条款违背即为高风险）：
+1) 必须美元（USD）计价签约，先收定金（≥30%）再采购
+2) 尾款付清才电放提单放货（提单=货权，严禁提前电放）
+3) 货款只走对公账户/合规结算账户，严禁个人账户收经营性外汇
+4) 出口走外贸代理或1039市场采购，严禁买单出口
+
+其他审核要点：
+- 品名、数量、单价是否与实际一致，有无模糊表述
+- 交货条款（FOB/CIF）是否明确且与实际一致
+- 付款方式是否安全（T/T优先，L/C需注明开证行）
+- COC/SONCAP等认证要求是否写明，费用归属是否清晰
+- 仲裁/争议解决条款是否有利于中方
+- 不可抗力条款是否完整
+- 合同双方信息是否完整（名称、地址、联系方式）
+- 合同是否有双方签字栏
+- 币种是否明确为USD
+- 是否存在模糊条款（如"到港后付款"、"验收后付款"等不利于卖方的表述）
+
+输出格式（Markdown）：
+## 风险等级：[低/中/高]（扣分X分/满分100）
+
+### 一、经营红线检查
+逐条检查四条红线，标注 ✅通过 / ❌违反 / ⚠️缺失，附简要说明。
+
+### 二、逐条审核
+对合同每个条款给出点评：✅合理 / ⚠️需修改 / ❌有问题，附修改建议。
+
+### 三、缺失条款
+列出合同中应当包含但缺失的条款。
+
+### 四、修改建议汇总
+按优先级列出需要修改的条款及具体建议措辞。
+"""
+
+
+def _ai_providers_deepseek_first():
+    """按 DeepSeek 优先返回 AI 通道列表（合同审核专用）。
+    找 fallbacks 中 base_url 含 deepseek 的通道优先；
+    其余通道按原顺序排在后面；跳过未填 Key 的。
+    """
+    cfg = load_ai_config()
+    providers = []
+    deepseek_pvs, other_pvs = [], []
+    # 主通道
+    if str(cfg.get("api_key", "")).strip():
+        if "deepseek" in cfg.get("base_url", "").lower():
+            deepseek_pvs.append(cfg)
+        else:
+            other_pvs.append(cfg)
+    # fallbacks
+    for fb in cfg.get("fallbacks") or []:
+        if isinstance(fb, dict) and str(fb.get("api_key", "")).strip():
+            merged = dict(cfg)
+            merged.update(fb)
+            if "deepseek" in (fb.get("base_url") or "").lower():
+                deepseek_pvs.append(merged)
+            else:
+                other_pvs.append(merged)
+    # DeepSeek 通道在前，其余在后
+    providers = deepseek_pvs + other_pvs
+    # 如果没有任何 DeepSeek 通道，回退到默认顺序
+    if not providers:
+        providers = _ai_providers()
+    return providers
+
+
+def ai_chat_deepseek_first(messages):
+    """调用 AI（DeepSeek 优先），多通道容灾。
+    与 ai_chat() 逻辑相同，但通道顺序改为 DeepSeek 优先。
+    """
+    global AI_LAST_ENGINE
+    providers = _ai_providers_deepseek_first()
+    if not providers:
+        raise RuntimeError("未配置任何可用的 AI API Key")
+    last_err = None
+    for pv in providers:
+        url = pv["base_url"].rstrip("/") + "/chat/completions"
+        body = {"model": pv["model"], "messages": messages, "temperature": 0.3}
+        body.update(pv.get("extra_body") or {})
+        payload = json.dumps(body).encode("utf-8")
+        req = urllib.request.Request(url, data=payload, headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {pv['api_key']}",
+        })
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(req, timeout=pv.get("timeout", 90),
+                                            context=ctx) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+            except urllib.error.HTTPError as e:
+                last_err = e
+                if attempt < 2 and e.code in (429, 500, 502, 503):
+                    time.sleep(8 * (attempt + 1))
+                    continue
+                break
+            except Exception as e:
+                last_err = e
+                break
+            err = data.get("error")
+            if err:
+                last_err = RuntimeError(f'{err.get("code")}: {err.get("message")}')
+                if attempt < 2 and str(err.get("code", "")) in ("1302", "1305", "1113"):
+                    time.sleep(8 * (attempt + 1))
+                    continue
+                break
+            msg = data["choices"][0]["message"] or {}
+            content = str(msg.get("content") or "").strip()
+            if not content:
+                content = str(msg.get("reasoning_content") or "").strip()
+            if not content:
+                last_err = RuntimeError("模型返回空内容")
+                break
+            AI_LAST_ENGINE = pv["model"]
+            return content
+    raise last_err
+
+
+def ai_contract_review(contract_text):
+    """
+    AI 审核合同文本（DeepSeek 优先）。
+    contract_text: 用户粘贴的合同全文
+    返回 (engine, review_result, risk_level, risk_score)
+    """
+    if not ai_enabled():
+        return ("rule", _rule_contract_review(contract_text), "medium", 50)
+    try:
+        prompt = (
+            "请审核以下合同文本。合同全文如下：\n\n"
+            "```\n" + contract_text[:12000] + "\n```\n\n"
+            "请按系统提示的输出格式审核，不要遗漏任何条款。"
+        )
+        result = ai_chat_deepseek_first([
+            {"role": "system", "content": CONTRACT_REVIEW_SYSTEM},
+            {"role": "user", "content": prompt},
+        ])
+        engine = AI_LAST_ENGINE or "deepseek-chat"
+        risk_level, risk_score = _parse_contract_risk(result)
+        return (engine, result, risk_level, risk_score)
+    except Exception as e:
+        fallback = _rule_contract_review(contract_text)
+        fallback += f"\n\n> ⚠️ AI 调用失败（{str(e)[:80]}），已降级为规则引擎审核。"
+        return ("rule(降级)", fallback, "medium", 50)
+
+
+def _parse_contract_risk(result):
+    """从 AI 审核结果中解析风险等级和扣分。"""
+    import re
+    risk_level = "medium"
+    risk_score = 50
+    m = re.search(r"风险等级[：:]\s*[低中高]\D*(\d+)", result)
+    if m:
+        risk_score = int(m.group(1))
+    m2 = re.search(r"风险等级[：:]\s*(低|中|高)", result)
+    if m2:
+        risk_level = {"低": "low", "中": "medium", "高": "high"}[m2.group(1)]
+    # 违反红线自动升级
+    if "❌" in result:
+        risk_level = "high"
+    elif risk_level == "low" and risk_score > 30:
+        risk_level = "medium"
+    return risk_level, risk_score
+
+
+def _rule_contract_review(contract_text):
+    """规则引擎合同审核（无 API Key 时的内置审核）。"""
+    t = contract_text.lower()
+    issues = []
+    score = 100
+
+    # 经营红线检查
+    lines = ["## 风险等级：中（扣分50/满分100）", "", "### 一、经营红线检查"]
+
+    # 红线1：美元计价
+    if "usd" in t or "us$" in t or "美元" in t:
+        lines.append("1. ✅ 美元计价：合同中包含 USD/美元 字样，符合红线要求。")
+    else:
+        lines.append("1. ❌ 美元计价：未找到 USD/美元计价条款，必须以美元签约！")
+        issues.append("币种未明确为USD")
+        score -= 20
+
+    # 红线2：定金
+    if "30%" in t or "deposit" in t or "advance" in t or "定金" in t or "预付" in t:
+        lines.append("2. ✅ 定金条款：合同中包含定金/预付条款。")
+    else:
+        lines.append("2. ❌ 定金条款：未找到定金/预付条款（应≥30%），必须先收定金再采购！")
+        issues.append("缺失定金条款")
+        score -= 20
+
+    # 红线3：尾款/提单
+    if "balance" in t or "尾款" in t or "b/l" in t or "提单" in t or "lading" in t:
+        lines.append("3. ✅ 尾款/提单：合同中包含尾款或提单相关条款。")
+    else:
+        lines.append('3. ⚠️ 尾款/提单条款：未找到明确的「尾款付清才放货」条款，建议补充。')
+        issues.append("尾款条款不明确")
+        score -= 10
+
+    # 红线4：出口方式
+    lines.append("4. ⚠️ 出口方式：此条款通常在合同外约定，建议确认走外贸代理或1039平台。")
+
+    # 其他检查
+    lines.append("")
+    lines.append("### 二、其他要点检查")
+
+    checks = [
+        ("trade term", ["fob", "cif", "exw", "贸易术语", "交货条款"], "交货条款"),
+        ("port", ["tema", "port", "港", "loading", "discharge"], "装卸港"),
+        ("coc", ["coc", "conformity", "符合性", "soncap"], "认证合规"),
+        ("arbitration", ["arbitration", "仲裁", "dispute", "争议"], "争议解决"),
+        ("force majeure", ["force majeure", "不可抗力"], "不可抗力"),
+        ("signature", ["signature", "签字", "authorized"], "签字栏"),
+    ]
+    for label, kws, name in checks:
+        found = any(k in t for k in kws)
+        if found:
+            lines.append(f"- ✅ {name}：合同中包含相关条款。")
+        else:
+            lines.append(f"- ⚠️ {name}：未找到相关条款，建议补充。")
+            issues.append(f"缺失{name}条款")
+            score -= 8
+
+    lines.append("")
+    lines.append("### 三、缺失条款")
+    if issues:
+        for i in issues:
+            lines.append(f"- {i}")
+    else:
+        lines.append("- 未发现明显缺失条款。")
+
+    lines.append("")
+    lines.append("### 四、修改建议汇总")
+    lines.append("1. 确保合同以 USD 计价，明确定金≥30%。")
+    lines.append('2. 明确「尾款100%付清后电放提单」，严禁提前放货。')
+    lines.append("3. 补充COC认证条款及费用归属。")
+    lines.append("4. 约定争议解决方式（建议CIETAC仲裁）。")
+    lines.append("")
+    lines.append("*（本报告由内置规则引擎生成：填入 ai_config.json 的 API Key 后，"
+                 "可升级为 DeepSeek 大模型深度审核。）*")
+
+    risk = "low" if score >= 80 else "medium" if score >= 50 else "high"
+    lines[0] = f"## 风险等级：{'低' if risk == 'low' else '中' if risk == 'medium' else '高'}（扣分{100 - score}/满分100）"
+    return "\n".join(lines)
+
+
+def save_contract_review(title, content, review_result, engine, risk_level, risk_score):
+    """保存合同审核记录到 contracts 表。返回新建的 id。"""
+    conn = get_db()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cur = conn.execute(
+        "INSERT INTO contracts (title, content, review_result, engine, "
+        "risk_level, risk_score, created_at) VALUES (?,?,?,?,?,?,?)",
+        (title or "未命名合同", content, review_result, engine, risk_level, risk_score, now))
+    conn.commit()
+    cid = cur.lastrowid
+    conn.close()
+    return cid
+
+
+def list_contracts():
+    """返回合同审核历史列表（倒序，最多100条）。"""
+    conn = get_db()
+    rows = [dict(r) for r in conn.execute(
+        "SELECT id, title, engine, risk_level, risk_score, created_at "
+        "FROM contracts ORDER BY id DESC LIMIT 100")]
+    conn.close()
+    return rows
+
+
+def load_contract(cid):
+    """加载单条合同审核详情。"""
+    conn = get_db()
+    r = conn.execute("SELECT * FROM contracts WHERE id=?", (cid,)).fetchone()
+    conn.close()
+    return dict(r) if r else None
 
 def save_quote(name, items, params, result, note=""):
     """
@@ -1682,6 +2073,24 @@ class DashboardHandler(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/quotes"):
             # 报价单列表
             self._send(200, {"quotes": list_quotes()})
+        elif self.path == "/api/contract/template":
+            # 合同模板
+            self._send(200, {"template": CONTRACT_TEMPLATE})
+        elif self.path == "/api/contract/history":
+            # 合同审核历史
+            self._send(200, {"contracts": list_contracts()})
+        elif path.startswith("/api/contract/"):
+            # 加载单条合同审核详情 /api/contract/{id}
+            try:
+                cid = int(path.split("/api/contract/")[1].split("/")[0])
+            except (ValueError, IndexError):
+                self._send(400, {"error": "invalid contract id"})
+                return
+            c = load_contract(cid)
+            if c:
+                self._send(200, c)
+            else:
+                self._send(404, {"error": "contract not found"})
         elif path.startswith("/api/quote/"):
             # 加载单个报价单详情 /api/quote/{id}
             try:
@@ -1821,6 +2230,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 ok, m = parts_vision.record_correction(parts_id, row["keyword"], row["img"] or "", new_ok)
                 msg = m
             self._send(200, {"ok": True, "msg": msg, "old_img_ok": old_ok, "new_img_ok": new_ok})
+        elif self.path == "/api/contract/review":
+            # AI 审核合同：请求体 {"title": "...", "content": "..."}
+            body = self._read_json()
+            title = (body.get("title") or "").strip() or "未命名合同"
+            content = (body.get("content") or "").strip()
+            if not content:
+                self._send(400, {"error": "合同内容不能为空"})
+                return
+            engine, result, risk_level, risk_score = ai_contract_review(content)
+            cid = save_contract_review(title, content, result, engine, risk_level, risk_score)
+            self._send(200, {"id": cid, "engine": engine, "review": result,
+                             "risk_level": risk_level, "risk_score": risk_score,
+                             "ts": datetime.now().strftime("%Y-%m-%d %H:%M")})
         else:
             self._send(404, {"error": "not found"})
 

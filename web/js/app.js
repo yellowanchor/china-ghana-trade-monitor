@@ -157,45 +157,71 @@
               <dt>海运 / 票</dt>
               <dd>一票 = 一个提单（B/L）对应的一批货物。不同票需分别报关、分别计费。海运费按票收取基础费 + 重量/体积附加。</dd>
               <dt>TEU / 柜</dt>
-              <dd>TEU = Twenty-foot Equivalent Unit（20 英尺标准集装箱）。1 个 20 尺柜 = 1 TEU，1 个 40 尺柜 = 2 TEU。整柜走海运，散货走拼箱（LCL）。</dd>
+              <dd>TEU = Twenty-foot Equivalent Unit（20英尺标准集装箱）。1个20尺柜=1 TEU，1个40尺柜=2 TEU。整柜（FCL）走海运，散货走拼箱（LCL）。20尺柜内容积约33 CBM，限重约28吨；40尺柜约67 CBM，限重约30吨。</dd>
+              <dt>LCL / FCL</dt>
+              <dd>LCL（Less than Container Load）= 拼箱，多个发货人共用一个柜，按CBM或吨计费（取大者），适合首单小批量（<15 CBM）。FCL（Full Container Load）= 整柜，一个柜一个发货人，按柜计费，单价更低。首单约1万美元货值建议LCL，量大后转FCL。</dd>
               <dt>CBM</dt>
-              <dd>Cubic Meter（立方米），海运散货体积计量单位。1 CBM 海运限重约 1 吨（重货）或 363 kg（泡货）。</dd>
+              <dd>Cubic Meter（立方米），海运散货体积计量单位。1 CBM海运限重约1吨（重货）或363 kg（泡货）。海运费按"CBM或吨，取大者"计收（即重货按吨、泡货按CBM）。计算公式：长(m)×宽(m)×高(m)。</dd>
               <dt>MOQ</dt>
-              <dd>Minimum Order Quantity（最低起订量），供应商要求的最小采购数量。</dd>
+              <dd>Minimum Order Quantity（最低起订量），供应商要求的最小采购数量。低于MOQ无法下单或需加价。批量越大单价越低，但首单不宜过量囤货。</dd>
+              <dt>HS Code</dt>
+              <dd>Harmonized System Code（海关商品编码），国际通用6位+各国扩展位。中国10位，加纳8位。决定了进口关税税率。摩配常用HS：8714100（摩托车零件）、8708990（汽车零件）。</dd>
               <dt>EXW / FOB / CIF</dt>
-              <dd>贸易术语：EXW 工厂交货（买方全责），FOB 船上交货（离港后买方负责运费保险），CIF 成本+保险+运费（卖方负责到目的港）。</dd>
+              <dd>贸易术语：① EXW（Ex Works）工厂交货，买方承担从工厂到目的地的全部费用和风险（卖方只负责在工厂交货）。② FOB（Free On Board）船上交货，卖方负责将货物交到装运港船上，离港后买方承担运费保险。③ CIF（Cost Insurance Freight）成本+保险+运费，卖方负责到目的港的运费和保险，但风险在装船后转移给买方。本项目首单建议FOB或CIF。</dd>
+              <dt>商业发票（Commercial Invoice）</dt>
+              <dd>出口报关核心单据，包含买卖双方信息、商品描述、HS Code、单价、总价、币种、贸易术语（如FOB Chongqing）、付款方式等。加纳清关需用商业发票计算CIF值以确定税基。</dd>
+              <dt>装箱单（Packing List）</dt>
+              <dd>列明每件/每箱的品名、数量、毛重（Gross Weight）、净重（Net Weight）、体积（CBM）、箱号唛头的清单。与商业发票配套使用，海关和物流凭此验货。</dd>
+              <dt>滞港费（Demurrage）</dt>
+              <dd>集装箱在目的港超过免费堆存期（通常7天）后，码头按天收取的超期费用。加纳特马港（Tema Port）约50-150美元/天/柜。必须提前指定清关代理，货物到港后尽快清关提货，避免滞港费累积。</dd>
             </dl>
           </div>
           <div class="kb-section">
             <h4><span class="iconfont icon-shield-check" style="margin-right:4px"></span>认证与合规</h4>
             <dl>
               <dt>COC</dt>
-              <dd>Certificate of Conformity（符合性证书），加纳进口强制认证，证明产品符合加纳标准。无 COC 货物将被海关扣留。</dd>
+              <dd>Certificate of Conformity（符合性证书），加纳进口强制认证，由加纳标准局（GSA）授权第三方机构出具。证明产品符合加纳标准。无COC货物将被海关扣留或强制退运。办理流程：装船前在出口国申请验货→验货通过出具COC→随货到港清关。费用约货值的0.5%-1.5%。</dd>
               <dt>SONCAP</dt>
-              <dd>Standards Organization of Nigeria Conformity Assessment Programme，尼日利亚符合性评定，流程类似 COC。</dd>
+              <dd>Standards Organization of Nigeria Conformity Assessment Programme，尼日利亚符合性评定，流程类似COC但针对尼日利亚市场。若未来拓展尼日利亚市场需办理。</dd>
               <dt>CE / FCC</dt>
-              <dd>CE = 欧盟产品安全认证标志；FCC = 美国联邦通信委员会认证（电子产品）。出口目的地不同要求不同。</dd>
-              <dt>ETC</dt>
-              <dd>出口退税登记证，中国出口企业办理退税时需提供的资质证明。</dd>
+              <dd>CE = 欧盟产品安全认证标志（Conformité Européenne），电子产品出口欧盟/非洲多数国家认可；FCC = 美国联邦通信委员会认证（电子产品电磁兼容）。出口目的地不同要求不同。加纳认可CE标志的产品。</dd>
+              <dt>FORM E / 原产地证</dt>
+              <dd>原产地证书（Certificate of Origin），证明货物原产国。中国-部分非洲国家有优惠关税安排时，凭原产地证可享受减免关税。普通原产地证(CO)在贸促会或海关办理；FORM E用于中国-东盟自贸区。加纳目前无双边自贸协定，但ECOWAS（西共体）成员国有区域关税优惠。</dd>
               <dt>B/L</dt>
-              <dd>Bill of Lading（提单），承运人签发的货物收据 + 物权凭证 + 运输合同证明。</dd>
+              <dd>Bill of Lading（提单），承运人签发的货物收据 + 物权凭证 + 运输合同证明。正本提单（Original B/L）3份，收货人凭正本提单提货。电放提单（Telex Release / Surrendered B/L）无需寄正本，发货人电告承运人放货——本项目尾款付清后电放提单是经营红线之一。</dd>
+              <dt>ETC</dt>
+              <dd>出口退税登记证，中国出口企业办理退税时需提供的资质证明。出口企业凭报关单、增值税发票等向税务局申请退税，退还国内环节已缴纳的增值税。摩配退税率约13%，可显著降低成本。</dd>
+              <dt>商检（CIQ）</dt>
+              <dd>中国进出口商品检验检疫。部分商品法定检验（法检），出口前需经海关检验合格出具《出境货物通关单》。非法检商品可免检出口。</dd>
             </dl>
           </div>
           <div class="kb-section">
             <h4><span class="iconfont icon-cash-coin" style="margin-right:4px"></span>条款与经营规则</h4>
             <dl>
-              <dt>先收定金再采购</dt>
-              <dd><b>经营红线</b>：收到客户定金后才能向供应商下单，降低库存与资金风险。定金未到账不得排产发货。</dd>
+              <dt>先收定金再采购 <span style="color:#e53935;font-size:11px">经营红线</span></dt>
+              <dd><b>经营红线①</b>：收到客户定金后才能向供应商下单，降低库存与资金风险。定金未到账不得排产发货。这是本项目的零垫资模式核心——用客户的钱做客户的生意。</dd>
+              <dt>尾款付清才电放提单 <span style="color:#e53935;font-size:11px">经营红线</span></dt>
+              <dd><b>经营红线②</b>：提单 = 货权。货物到港后，必须收到100%尾款才能电放提单让收货人提货。提前电放=丧失货权=可能钱货两空。</dd>
+              <dt>对公账户收汇 <span style="color:#e53935;font-size:11px">经营红线</span></dt>
+              <dd><b>经营红线③</b>：货款只走外贸代理对公账户或1039市场采购平台合规结汇，严禁个人账户收经营性外汇。违规可能涉嫌逃汇，面临行政处罚。</dd>
+              <dt>严禁买单出口 <span style="color:#e53935;font-size:11px">经营红线</span></dt>
+              <dd><b>经营红线④</b>：出口走外贸代理或1039市场采购贸易方式（重庆大足试点），严禁买单出口（借他人抬头报关）。买单出口无退税、单据不合规、风险极大。</dd>
               <dt>定金比例</dt>
-              <dd>默认 30%，覆盖采购成本。尾款在发货前或到港后结清。</dd>
-              <dt>付款方式</dt>
-              <dd>T/T（电汇）为主，L/C（信用证）为大额备选。预付 T/T 30% + 发货前 T/T 70% 为常见组合。</dd>
+              <dd>默认30%（覆盖采购成本+海运基础费），大额订单可协商30%-50%。尾款在发货前（FOB/CIF条件下船开前）结清。建议合同约定：T/T 30%预付定金 + T/T 70%发货前付清尾款。</dd>
+              <dt>付款方式 T/T vs L/C</dt>
+              <dd>T/T（电汇，Telegraphic Transfer）为主：速度快、费用低、操作简单，但依赖信任。L/C（信用证，Letter of Credit）为大额备选（>5万美元）：银行信用担保，安全性高，但手续费高（约0.1%-0.25%）、流程复杂、需满足单据100%相符原则。建议首单用T/T，金额超5万美元后可转L/C。</dd>
+              <dt>CIF 价格构成</dt>
+              <dd>CIF = 成本（采购价）+ 保险（CIF×0.4%≈货值千四）+ 海运费 + 报关代理费 + 杂费。实际操作中还需加上加价率（默认21%）形成最终报价。注意：CIF条件下卖方负责到港运费保险，但风险在装船后转移给买方。</dd>
               <dt>加纳综合税负</dt>
-              <dd>含进口关税 + CET（共同对外关税）+ VAT（14.5%）+ NHIL（2.5%）+ GETFL（2.5%）等。摩配约 32.45%，成品约 57.45%。</dd>
+              <dd>含进口关税 + CET（共同对外关税）+ VAT（增值税14.5%）+ NHIL（国家健康保险税2.5%）+ GETFL（教育信托基金税2.5%）+ 各种手续费。摩配（HS 8714）：CET约10%→综合约32.45%；成品摩托车：CET约20-35%→综合约57.45%。税负是定价的关键变量。</dd>
               <dt>股比分配</dt>
-              <dd>重庆方 51% / 加纳方 49%（合伙人协议约定），利润按此比例分成。</dd>
+              <dd>重庆方 51% / 加纳方 49%（合伙人协议约定），利润按此比例分成。51%保证重庆方对公司的实际控制权（>50%即为控股权）。</dd>
               <dt>报价公式</dt>
-              <dd>总成本 ×（1 + 加价率）= 报价。默认加价率 21%，可根据品类竞争情况浮动。</dd>
+              <dd>总成本 ×（1 + 加价率）= 报价。总成本 = 采购成本 + 海运费 + 报关代理费 + 杂费。默认加价率21%，可根据品类竞争情况浮动（摩配可至25-30%，日用品15-20%）。报价以美元计价（经营红线①）。</dd>
+              <dt>出口退税</dt>
+              <dd>中国出口企业可申请退还货物在国内生产流通环节已缴纳的增值税。摩配退税率约13%。退税款是重要的利润来源——实际采购成本 = 含税采购价 - 退税款。但需有合规的单据链（增值税专用发票 + 报关单 + 出口发票）。</dd>
+              <dt>合同审核要点</dt>
+              <dd>重点核查：① 币种是否为USD（不接受人民币/塞地结算）；② 定金比例≥30%；③ 尾款条款是否为"发货前付清"或"见提单复印件付清"（不接受到港后付款）；④ 仲裁/争议解决条款；⑤ 品名数量与报价单一致；⑥ 交货条款（FOB/CIF）与实际一致；⑦ COC费用归属。</dd>
             </dl>
           </div>
         </div>
@@ -642,6 +668,155 @@
     </div>`,
   };
 
+  /* ---------- 合同审核 ---------- */
+  const ContractView = {
+    data() {
+      return {
+        title: '',
+        content: '',
+        reviewing: false,
+        result: null,          // {engine, review, risk_level, risk_score, ts, id}
+        showHistory: false,
+        history: [],
+        loadingHistory: false,
+      };
+    },
+    computed: {
+      riskColor() {
+        if (!this.result) return '';
+        return { low: '#34c759', medium: '#ff9500', high: '#e53935' }[this.result.risk_level] || '';
+      },
+      riskLabel() {
+        if (!this.result) return '';
+        return { low: '低风险', medium: '中风险', high: '高风险' }[this.result.risk_level] || '';
+      },
+      canReview() { return this.content.trim().length > 10; },
+    },
+    methods: {
+      md2html,
+      async loadTemplate() {
+        try {
+          const d = await api('/api/contract/template');
+          this.content = d.template;
+          this.title = '销售合同_' + new Date().toLocaleDateString('zh-CN').replace(/\//g, '');
+          ElMessage.success('已加载标准合同模板，请编辑后审核');
+        } catch (e) { ElMessage.error('加载模板失败: ' + e.message); }
+      },
+      async doReview() {
+        if (!this.canReview) { ElMessage.warning('合同内容太短，请输入完整合同文本'); return; }
+        this.reviewing = true;
+        this.result = null;
+        try {
+          this.result = await api('/api/contract/review', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title: this.title, content: this.content }),
+          });
+          ElMessage.success('AI 合同审核完成');
+        } catch (e) { ElMessage.error('审核失败: ' + e.message); }
+        finally { this.reviewing = false; }
+      },
+      async loadHistory() {
+        this.loadingHistory = true;
+        try {
+          const d = await api('/api/contract/history');
+          this.history = d.contracts || [];
+        } catch (e) { console.error('contract history:', e); }
+        finally { this.loadingHistory = false; }
+      },
+      toggleHistory() {
+        this.showHistory = !this.showHistory;
+        if (this.showHistory && !this.history.length) this.loadHistory();
+      },
+      async loadContract(id) {
+        try {
+          const d = await api('/api/contract/' + id);
+          this.title = d.title || '';
+          this.content = d.content || '';
+          this.result = { engine: d.engine, review: d.review_result, risk_level: d.risk_level,
+                          risk_score: d.risk_score, ts: (d.created_at || '').slice(0, 16), id: d.id };
+          ElMessage.success('已加载历史合同审核记录');
+        } catch (e) { ElMessage.error('加载失败: ' + e.message); }
+      },
+      fmtDate(s) { return String(s || '').slice(0, 16); },
+    },
+    mounted() {
+      // 默认加载模板让用户看到
+      this.loadTemplate();
+    },
+    template: `
+    <div class="content-inner">
+      <div class="section-head">
+        <div class="kicker">Contract Review</div>
+        <h2>合同审核</h2>
+        <div class="desc">AI 审核贸易合同，逐条检查经营红线、付款条款、合规认证等（默认优先使用 DeepSeek 引擎，多通道容灾）。</div>
+      </div>
+      <div class="contract-layout">
+        <div class="contract-editor panel">
+          <h3 class="panel-title"><span class="iconfont icon-file-earmark-text" style="color:#0071e3"></span>合同文本
+            <span class="tip">编辑或粘贴合同全文</span></h3>
+          <div class="toolbar" style="margin-bottom:10px">
+            <el-input v-model="title" placeholder="合同标题" style="width:280px"></el-input>
+            <el-button @click="loadTemplate">
+              <span class="iconfont icon-file-earmark-plus" style="margin-right:6px"></span>加载模板
+            </el-button>
+            <el-button type="primary" :loading="reviewing" :disabled="!canReview" @click="doReview">
+              <span class="iconfont icon-magic" style="margin-right:6px"></span>AI 审核
+            </el-button>
+            <el-button text @click="toggleHistory">
+              {{ showHistory ? '收起' : '查看' }}审核历史（{{ history.length }}）
+            </el-button>
+          </div>
+          <el-input v-model="content" type="textarea" :rows="22"
+            placeholder="在此粘贴或编辑合同全文…可点击"加载模板"使用标准合同模板"
+            style="font-family:monospace;font-size:12.5px"></el-input>
+        </div>
+        <div class="contract-result panel">
+          <h3 class="panel-title">
+            <span class="iconfont icon-shield-check" style="color:#0071e3"></span>审核结果
+            <span v-if="result" class="engine-badge" :title="'审核引擎：' + result.engine">{{ result.engine }}</span>
+          </h3>
+          <div v-if="reviewing" style="color:#86868b;padding:30px 0;text-align:center">
+            <span class="iconfont icon-arrow-clockwise" style="font-size:24px;animation:spin 1s linear infinite;display:inline-block"></span>
+            <p style="margin-top:10px">AI 正在审核合同，约 10-30 秒…</p>
+          </div>
+          <div v-else-if="result" style="overflow:hidden">
+            <div class="risk-banner" :style="{borderColor: riskColor}">
+              <span class="risk-label" :style="{color: riskColor}">{{ riskLabel }}</span>
+              <span style="color:#86868b;font-size:12.5px">风险扣分 {{ 100 - (result.risk_score || 0) }}/100</span>
+              <span style="color:#86868b;font-size:12.5px"> ｜ {{ result.ts }}</span>
+            </div>
+            <div class="md contract-review-md" v-html="md2html(result.review)"></div>
+          </div>
+          <div v-else style="color:#86868b;padding:30px 0;text-align:center">
+            点击「AI 审核」按钮，开始审核合同文本
+          </div>
+        </div>
+      </div>
+      <div v-if="showHistory && history.length" class="panel" v-loading="loadingHistory">
+        <h3 class="panel-title"><span class="iconfont icon-clock" style="color:#0071e3"></span>审核历史</h3>
+        <el-table :data="history" size="small" style="width:100%">
+          <el-table-column prop="title" label="合同标题" min-width="180"></el-table-column>
+          <el-table-column label="风险等级" width="100">
+            <template #default="{ row }">
+              <span :style="{color: {low:'#34c759',medium:'#ff9500',high:'#e53935'}[row.risk_level], fontWeight:600}">
+                {{ {low:'低',medium:'中',high:'高'}[row.risk_level] }}
+              </span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="engine" label="引擎" width="140"></el-table-column>
+          <el-table-column label="时间" width="140">
+            <template #default="{ row }"><span style="color:#86868b">{{ fmtDate(row.created_at) }}</span></template>
+          </el-table-column>
+          <el-table-column label="操作" width="80" align="center">
+            <template #default="{ row }">
+              <el-button type="primary" link size="small" @click="loadContract(row.id)">查看</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+    </div>`,
+  };
+
   /* ---------- 利润测算 ---------- */
   const CalculatorView = {
     props: { defaults: Object, defaultItem: Object, categories: Array },
@@ -1059,7 +1234,7 @@
      根组件：顶栏 + 侧栏 + 展示栏
      ============================================================ */
   const App = {
-    components: { OverviewView, RatesView, PoliciesView, PartsView, AiReportView, CalculatorView },
+    components: { OverviewView, RatesView, PoliciesView, PartsView, AiReportView, ContractView, CalculatorView },
     data() {
       return {
         activeView: 'overview',
@@ -1116,6 +1291,7 @@
             <el-menu-item index="policies"><span class="iconfont icon-journal-text menu-ico"></span>政策监控</el-menu-item>
             <el-menu-item index="parts"><span class="iconfont icon-box-seam menu-ico"></span>配件报价</el-menu-item>
             <el-menu-item index="ai"><span class="iconfont icon-magic menu-ico"></span>AI 日报</el-menu-item>
+            <el-menu-item index="contract"><span class="iconfont icon-file-earmark-text menu-ico"></span>合同审核</el-menu-item>
             <el-menu-item index="calculator"><span class="iconfont icon-cash-coin menu-ico"></span>利润测算</el-menu-item>
           </el-menu>
           <div class="sidebar-foot">
@@ -1129,6 +1305,7 @@
           <PoliciesView v-else-if="activeView === 'policies'" :policies="summary.policies" />
           <PartsView v-else-if="activeView === 'parts'" />
           <AiReportView v-else-if="activeView === 'ai'" :last-report="summary.last_report" :ai-enabled="summary.ai_enabled" />
+          <ContractView v-else-if="activeView === 'contract'" />
           <CalculatorView v-else :defaults="summary.calc_defaults" :default-item="summary.calc_default_item" :categories="summary.categories" />
         </el-main>
       </el-container>
