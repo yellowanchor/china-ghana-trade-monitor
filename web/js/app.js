@@ -344,15 +344,18 @@
       },
     },
     methods: {
-      async load() {
+      async load(keepPage) {
         this.loading = true;
+        const prevPage = this.page;   // 记住当前页码（纠正后刷新时保持）
         try {
           const params = new URLSearchParams();
           if (this.kwFilter) params.set('keyword', this.kwFilter);
           if (this.confirmed) params.set('confirmed', '1');
           const url = '/api/parts' + (params.toString() ? '?' + params.toString() : '');
           this.data = await api(url);
-          this.page = 1;
+          // 纠正后刷新：保持在原页；若数据变少则收敛到最后一页
+          const totalPages = Math.max(1, Math.ceil(((this.data && this.data.quotes) || []).length / this.pageSize));
+          this.page = keepPage ? Math.min(prevPage, totalPages) : 1;
         } catch (e) { ElMessage.error('加载配件报价失败: ' + e.message); }
         finally { this.loading = false; }
       },
@@ -404,7 +407,7 @@
           if (d.skipped) { ElMessage.info(d.msg); return; }
           row.img_ok = d.new_img_ok;
           ElMessage.success(action + '成功，' + d.msg + '，后续抓取将参考该样本');
-          this.load();
+          this.load(true);   // 保持当前页刷新（标记"其实不是"后该行会消失，页码自动收敛）
         } catch (e) { ElMessage.error(action + '失败: ' + e.message); }
       },
     },
@@ -427,7 +430,7 @@
         <el-button :loading="fetching" @click="fetchAll">
           <span class="iconfont icon-arrow-clockwise" style="margin-right:6px"></span>抓取全部默认词
         </el-button>
-        <el-switch v-model="confirmed" active-text="仅看 AI 确认" @change="load" style="margin-left:4px" />
+        <el-switch v-model="confirmed" active-text="仅看 AI 确认" @change="load()" style="margin-left:4px" />
         <span v-if="fetchMsg" style="color:#86868b;font-size:12.5px">{{ fetchMsg }}</span>
       </div>
       <div class="grid-cards">
