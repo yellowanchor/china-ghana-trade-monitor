@@ -162,8 +162,37 @@
       render() {
         if (!this.chart || !this.hasData) return;
         this.chart.setOption({
-          tooltip: { trigger: 'axis', backgroundColor: 'rgba(29,29,31,0.85)', borderWidth: 0,
-                     textStyle: { color: '#fff', fontSize: 12 } },
+          tooltip: {
+            trigger: 'axis',
+            axisPointer: { type: 'cross', label: { backgroundColor: '#3a3a3c' } },
+            backgroundColor: 'rgba(29,29,31,0.88)',
+            borderWidth: 0,
+            padding: [10, 14],
+            textStyle: { color: '#fff', fontSize: 12 },
+            formatter(params) {
+              const p = Array.isArray(params) ? params : [params];
+              const date = (p[0] && p[0].axisValueLabel) || '';
+              const byName = {};
+              (p || []).forEach(x => { if (x && x.seriesName != null) byName[x.seriesName] = x.value; });
+              const cny = byName['USD/CNY'];
+              const ghs = byName['USD/GHS'];
+              const fmt = v => (v === null || v === undefined || isNaN(Number(v)))
+                ? '--' : Number(v).toFixed(4);
+              const cross = (cny != null && ghs != null && Number(ghs) !== 0)
+                ? (Number(cny) / Number(ghs)).toFixed(4) : '--';
+              const dot = color => '<span style="display:inline-block;width:8px;height:8px;' +
+                'border-radius:50%;background:' + color + ';margin-right:6px;' +
+                'vertical-align:middle"></span>';
+              const row = (name, val, color) => '<div style="display:flex;justify-content:space-between;' +
+                'align-items:center;gap:20px;margin-top:5px">' +
+                '<span style="display:inline-flex;align-items:center">' + dot(color) + name + '</span>' +
+                '<span style="font-weight:600;font-variant-numeric:tabular-nums">' + val + '</span></div>';
+              return '<div style="font-weight:600">' + date + '</div>' +
+                     row('USD / CNY', fmt(cny), '#ff3b30') +
+                     row('USD / GHS', fmt(ghs), '#0071e3') +
+                     row('GHS / CNY 交叉', cross, '#34c759');
+            },
+          },
           legend: { data: ['USD/CNY', 'USD/GHS'], textStyle: { color: '#86868b' }, top: 4 },
           grid: { left: 52, right: 52, top: 44, bottom: 30 },
           xAxis: { type: 'category', data: this.dates, axisLine: { lineStyle: { color: '#d2d2d7' } },
