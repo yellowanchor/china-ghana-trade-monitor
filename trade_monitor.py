@@ -824,17 +824,18 @@ def _parse_history_payload(data, target):
     return out or None
 
 
-def _fetch_history_with_key(key, start, end):
+def _fetch_history_with_key(key, start, end, period="30d"):
     """
     用 allratestoday.com 免费 key 回填历史汇率（Bearer 认证）。
     该服务一次仅支持单个 target，故对 USD/CNY、USD/GHS 各请求一次再按日期合并。
+    period 按缺口天数选择（7d/14d/30d），节省免费请求额度。
     返回 (是否成功, 摘要文本)。
     """
     headers = {"Authorization": "Bearer " + key, "User-Agent": "Mozilla/5.0"}
     merged = {}
     errs = []
     for target in ("CNY", "GHS"):
-        q = urllib.parse.urlencode({"source": "USD", "target": target, "period": "30d"})
+        q = urllib.parse.urlencode({"source": "USD", "target": target, "period": period})
         try:
             req = urllib.request.Request(RATE_HISTORY_API + "?" + q, headers=headers)
             with urllib.request.urlopen(req, timeout=25) as resp:
@@ -908,21 +909,105 @@ def _write_history_rows(rows, start, end):
     return n
 
 
-def fetch_rates_history(days=30):
+def fetch_rates_history(days=30, start=None, end=None):
     """
-    回填最近 days 天历史汇率到 rates 表（多源策略）：
+    回填历史汇率到 rates 表（多源策略）：
       1) ai_config.json 配置了 rate_api_key → allratestoday.com（USD/CNY + USD/GHS 市场中间价，
-         含周末日历日序列，Bearer 认证）
+         含周末日历日序列，Bearer 认证；period 按「今天距 start 的天数」选择，省免费额度）
       2) 无 key → 欧洲央行参考汇率 frankfurter.app 补 USD/CNY 历史（仅工作日，不覆盖已有记录），
          GHS 无 ECB 数据跳过
+    start/end 显式指定回填区间（YYYY-MM-DD）；缺省为最近 days 天。
     返回 (是否成功, 摘要文本)。
     """
-    end = datetime.now().strftime("%Y-%m-%d")
-    start = (datetime.now().date() - timedelta(days=days - 1)).strftime("%Y-%m-%d")
+    today = datetime.now().strftime("%Y-%m-%d")
+    end = end or today
+    if not start:
+        days = max(1, min(days, 30))
+        start = (datetime.now().date() - timedelta(days=days - 1)).strftime("%Y-%m-%d")
+    # allratestoday 的 period 是「从今天往回 N 天」，须覆盖到 start
+    reach = (datetime.now().date() - datetime.strptime(start, "%Y-%m-%d").date()).days + 1
+    period = "7d" if reach <= 7 else ("14d" if reach <= 14 else "30d")
     key = _load_rate_api_key()
     if key:
-        return _fetch_history_with_key(key, start, end)
+        return _fetch_history_with_key(key, start, end, period)
     return _fetch_history_cny_frankfurter(start, end)
+
+
+def sync_rates_to_today():
+    """
+    启动时汇率缺口同步：从今天往回找最长连续数据段，段之前最后一条数据日期即
+    「上次停留时间」，把中间缺口一直补齐到今天（含当日）。策略：
+      - 库为空        → 先回填 30 天历史，再采当日实时
+      - 无缺口且当日已有 → 无事可做
+      - 只缺当日      → 采当日实时（fetch_rates）
+      - 中间有缺口    → 历史回填缺口区间；缺口早端距今超 30 天时尽力回填并提示
+      - 回填后当日仍缺 → 追加一次当日实时采集
+    同步失败不影响看板启动（调用方已捕获异常）。
+    返回 (是否执行了采集, 摘要文本)。
+    """
+    today_d = datetime.now().date()
+    today = today_d.strftime("%Y-%m-%d")
+    conn = get_db()
+    dates = {r[0] for r in conn.execute("SELECT date FROM rates")}
+    conn.close()
+
+    if not dates:  # 库为空：首次使用
+        print("[汇率同步] 库内无数据，先回填 30 天历史 ...")
+        ok, msg = fetch_rates_history(30)
+        print(f"[汇率同步] {msg}")
+        if not _has_rate(today):
+            fetch_rates()
+        return True, "首次回填完成"
+
+    # 从今天往回找最长连续段的最早一天 streak_start（今天缺则为明天，即空段）
+    streak_start = today_d + timedelta(days=1)
+    d = today_d
+    while d.strftime("%Y-%m-%d") in dates:
+        streak_start = d
+        d -= timedelta(days=1)
+
+    # 段之前最后一条数据 = 上次停留时间
+    prev = max((x for x in dates if x < streak_start.strftime("%Y-%m-%d")), default=None)
+
+    if prev is None:  # 连续段已覆盖库内全部数据
+        if today in dates:
+            return False, "汇率已最新（%s）" % streak_start.strftime("%Y-%m-%d")
+        print("[汇率同步] 仅缺今日，采集实时汇率 ...")
+        ok, msg = fetch_rates()
+        print("[汇率同步] " + msg)
+        return ok, msg
+
+    # 中间存在缺口：prev+1 ~ streak_start-1（若今天也缺，则到今天）
+    hole_start_d = datetime.strptime(prev, "%Y-%m-%d").date() + timedelta(days=1)
+    hole_end_d = streak_start - timedelta(days=1)
+    hole_start = hole_start_d.strftime("%Y-%m-%d")
+    hole_end = hole_end_d.strftime("%Y-%m-%d")
+
+    warn = ""
+    reach_days = (today_d - hole_start_d).days + 1
+    if reach_days > 30:
+        print(f"[汇率同步] 上次停留 {prev}，缺口 {hole_start} ~ {hole_end}（早端距今 {reach_days} 天，"
+              f"免费源单次仅能覆盖最近 30 天，尽力回填）...")
+        warn = "；更早缺口超出免费源 30 天范围，仅能补最近部分"
+    else:
+        print(f"[汇率同步] 上次停留 {prev}，缺口 {hole_start} ~ {hole_end}，回填中 ...")
+    ok, msg = fetch_rates_history(0, start=hole_start, end=hole_end)
+    print("[汇率同步] " + msg + warn)
+
+    # 当日仍缺（今天本就在缺口内但历史源未含今日，或今天单独缺）→ 追加实时
+    if not _has_rate(today):
+        ok2, msg2 = fetch_rates()
+        print("[汇率同步] 补采今日实时: " + msg2)
+        ok = ok or ok2
+    return True, (msg + warn).strip()
+
+
+def _has_rate(date):
+    """rates 表中是否已有指定日期记录。"""
+    conn = get_db()
+    hit = conn.execute("SELECT 1 FROM rates WHERE date=?", (date,)).fetchone()
+    conn.close()
+    return hit is not None
 
 
 # ==============================================================================
@@ -3694,19 +3779,16 @@ def build_summary():
 
 
 def serve(host=None, port=None, open_browser=True):
-    """启动 Web 看板：若当日还没有汇率数据，先自动补采一次。
+    """启动 Web 看板：自动检测汇率数据上次停留时间，把缺口补齐到今天再启动。
     host/port 优先用参数，其次环境变量 TM_HOST/TM_PORT，最后 127.0.0.1:8765。
     open_browser=False 时不自动打开浏览器（服务器部署用）。
     """
     h = host or HOST
     p = port or PORT
-    conn = get_db()
-    today = datetime.now().strftime("%Y-%m-%d")
-    has_today = conn.execute("SELECT 1 FROM rates WHERE date=?", (today,)).fetchone()
-    conn.close()
-    if not has_today:
-        print("当日尚无汇率数据，先自动采集一次 ...")
-        fetch_rates()
+    try:
+        sync_rates_to_today()   # 检测最后数据日期 → 缺口一直补到本日（失败不阻塞启动）
+    except Exception as e:
+        print(f"[汇率同步] 启动同步失败（不影响看板启动）: {e}")
     print(f"看板已启动：http://{h}:{p}  （{'浏览器将自动打开，' if open_browser else ''}Ctrl+C 退出）")
     server = ThreadingHTTPServer((h, p), DashboardHandler)
     if open_browser:
