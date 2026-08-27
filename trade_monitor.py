@@ -1715,8 +1715,14 @@ def build_daily_context():
     key_policies = [dict(p) for p in conn.execute(
         "SELECT source, title, url, keyword FROM policies WHERE keyword != '' "
         "ORDER BY first_seen DESC LIMIT 20")]
+    total_days = conn.execute("SELECT COUNT(*) FROM rates").fetchone()[0]
     conn.close()
+    # 近30天汇率历史序列（按日期升序），供大模型研判趋势——不能只给当日一条
+    rate_history = [{"date": r["date"], "usd_cny": r["usd_cny"],
+                     "usd_ghs": r["usd_ghs"], "ghs_cny": r["ghs_cny"]}
+                    for r in rates if r.get("usd_ghs") is not None]
     return {"date": today, "latest_rate": latest, "ghs_change_pct": ghs_change,
+            "rate_history_30d": rate_history, "rate_total_days": total_days,
             "new_policies_today": new_policies, "key_policies": key_policies}
 
 
@@ -1731,9 +1737,12 @@ def generate_ai_report():
             prompt = (
                 f"以下是贸易监控系统 {ctx['date']} 采集的真实数据（JSON）：\n"
                 f"{json.dumps(ctx, ensure_ascii=False, indent=1)}\n\n"
+                "其中 rate_history_30d 是近30天汇率日序列（date/usd_cny/usd_ghs/ghs_cny，"
+                "升序），rate_total_days 是库里累计采集天数，请务必基于这段历史序列分析趋势"
+                "（涨跌幅、区间、加速度），不要只看 latest_rate 一条；"
+                "数据不足30天时如实说明。\n\n"
                 "请基于以上数据输出三段式日报（Markdown，总长600字内）：\n"
-                "## 一、汇率风险研判\n（结合塞地兑美元变动，评估对回款与报价的影响；"
-                "数据不足30天时如实说明）\n"
+                "## 一、汇率风险研判\n（结合塞地兑美元近30天走势，评估对回款与报价的影响）\n"
                 "## 二、政策要点\n（仅点评与出口/外汇/创业扶持真正相关的条目，"
                 "每条注明来源；无相关条目则写'今日无直接相关新政策'）\n"
                 "## 三、对首单的可执行建议\n（3条以内，具体到动作；严格守住四条经营红线）"
