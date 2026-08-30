@@ -7,6 +7,7 @@
 
   const { createApp, ref, reactive, computed, onMounted, onBeforeUnmount, watch, nextTick } = Vue;
   const ElMessage = ElementPlus.ElMessage;
+  const ElMessageBox = ElementPlus.ElMessageBox;
 
   /* ---------------- 通用工具 ---------------- */
   const fmt = n => Number(n || 0).toLocaleString('zh-CN');
@@ -929,6 +930,18 @@
           this.listingSource = this.listings.length ? '瓜子二手车·深圳站' : '';
         } catch (e) { ElMessage.error('加载失败: ' + e.message); }
       },
+      async deleteHistory(h) {
+        try {
+          await ElMessageBox.confirm(`确定删除「${h.keyword} ${h.year} 款」这条历史记录吗？`, '删除确认', {
+            confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning',
+          });
+        } catch (e) { return; }  // 用户取消
+        try {
+          await api('/api/cars/' + h.id, { method: 'DELETE' });
+          this.history = this.history.filter(x => x.id !== h.id);
+          ElMessage.success('已删除');
+        } catch (e) { ElMessage.error('删除失败: ' + e.message); }
+      },
     },
     mounted() { this.loadHistory(); },
     template: `
@@ -1061,6 +1074,9 @@
             <span class="car-history-kw">{{ h.keyword }}</span>
             <span class="car-history-year">{{ h.year }} 款</span>
             <span class="car-history-ts">{{ h.ts }}</span>
+            <button class="car-history-del" @click.stop="deleteHistory(h)" title="删除该记录">
+              <span class="iconfont icon-trash"></span>
+            </button>
           </div>
         </div>
       </div>

@@ -641,6 +641,13 @@ html.dark .topbar .nav-icon.theme-toggle:hover { color: #ffd60a; }
 .car-history-kw { font-weight: 600; color: var(--text-1, #1d1d1f); }
 .car-history-year { color: var(--text-2, #86868b); }
 .car-history-ts { margin-left: auto; font-size: 11.5px; color: var(--text-3); }
+.car-history-del {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border: none; border-radius: 6px;
+  background: transparent; color: var(--text-3); cursor: pointer;
+  font-size: 14px; transition: all .15s; flex-shrink: 0;
+}
+.car-history-del:hover { background: rgba(229,57,53,.1); color: #e53935; }
 
 /* ===== 二手车模块 · 真实车源卡片 ===== */
 .car-source { margin-top: 18px; }

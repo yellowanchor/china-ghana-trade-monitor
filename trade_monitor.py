@@ -3987,10 +3987,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
             conn.close()
             self._send(200, {"quotes": quotes, "stats": stats, "confirmed": confirmed})
         elif path == "/api/cars/history":
-            # 二手车搜索历史（不含正文，点击后再取详情）
+            # 二手车搜索历史（不含正文，点击后再取详情）。
+            # 同一「关键词+年份」只保留最新一条（按 id 取每组最大），避免重复词条刷屏。
             conn = get_db()
             rows = conn.execute(
                 "SELECT id, ts, keyword, year, engine FROM car_queries "
+                "WHERE id IN (SELECT MAX(id) FROM car_queries GROUP BY keyword, year) "
                 "ORDER BY id DESC LIMIT 50").fetchall()
             conn.close()
             self._send(200, {"items": [dict(r) for r in rows]})
@@ -4193,6 +4195,28 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return json.loads(raw.decode("utf-8"))
         except Exception:
             return {}
+
+    def do_DELETE(self):
+        """删除类操作：目前仅 DELETE /api/cars/{id}（删除二手车历史词条 + 关联车源）。"""
+        path = self.path.split("?", 1)[0]
+        if not self.current_user():
+            return self._send(401, {"error": "unauthorized", "login": True})
+        if path.startswith("/api/cars/"):
+            try:
+                cid = int(path.split("/api/cars/")[1].split("/")[0])
+            except ValueError:
+                return self._send(400, {"error": "无效的报告 id"})
+            conn = get_db()
+            cur = conn.execute("DELETE FROM car_queries WHERE id=?", (cid,))
+            conn.execute("DELETE FROM car_listings WHERE query_id=?", (cid,))  # 级联清理关联车源
+            conn.commit()
+            conn.close()
+            if cur.rowcount > 0:
+                self._send(200, {"ok": True, "deleted": cid})
+            else:
+                self._send(404, {"error": "报告不存在"})
+        else:
+            self._send(404, {"error": "not found"})
 
     # ---------------- 鉴权辅助 ----------------
     def current_user(self):
