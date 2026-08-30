@@ -618,3 +618,41 @@ html.dark .topbar .nav-icon.theme-toggle:hover { color: #ffd60a; }
 .car-history-kw { font-weight: 600; color: var(--text-1, #1d1d1f); }
 .car-history-year { color: var(--text-2, #86868b); }
 .car-history-ts { margin-left: auto; font-size: 11.5px; color: var(--text-3); }
+
+/* ===== 二手车模块 · 真实车源卡片 ===== */
+.car-source { margin-top: 18px; }
+.car-source-head {
+  font-size: 13.5px; font-weight: 600; color: var(--text-1, #1d1d1f);
+  display: flex; align-items: center; gap: 6px; margin-bottom: 10px; flex-wrap: wrap;
+}
+.car-source-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px;
+}
+.car-card {
+  display: block; border: 1px solid var(--border, rgba(0,0,0,.08)); border-radius: 10px;
+  overflow: hidden; text-decoration: none; transition: all .15s; background: var(--panel-2, #fff);
+}
+.car-card:hover { border-color: var(--accent); box-shadow: 0 4px 14px rgba(48,100,255,.12); transform: translateY(-2px); }
+.car-card-img { position: relative; height: 130px; background: var(--accent-soft, rgba(48,100,255,.05)); }
+.car-card-img img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.car-card-noimg {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  font-size: 34px; color: var(--text-3, #aaa);
+}
+.car-card-title {
+  padding: 8px 10px 2px; font-size: 13px; font-weight: 600; color: var(--text-1, #1d1d1f);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.car-card-desc { padding: 0 10px; font-size: 12px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.car-card-bottom { padding: 6px 10px 10px; display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.car-card-price { font-size: 13px; color: #e0342c; }
+.car-card-price b { font-size: 17px; }
+.car-card-tag {
+  font-size: 11px; padding: 1px 7px; border-radius: 20px;
+  border: 1px solid rgba(0,155,63,.4); color: #009B3F; white-space: nowrap;
+}
+.car-warn-box {
+  margin-top: 14px; padding: 12px 14px; border-radius: 10px;
+  background: rgba(184,134,11,.07); border: 1px solid rgba(184,134,11,.25);
+  color: #b8860b; font-size: 13px;
+}

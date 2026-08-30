@@ -44,6 +44,7 @@ import base64
 import ssl
 import sqlite3
 import sys
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -60,6 +61,14 @@ try:
 except Exception as _e:
     parts_vision = None
     check_image = lambda img_url, kw, **_kw: (None, None)
+
+# 可选的 curl_cffi：模拟浏览器 TLS 指纹抓取二手车源（缺失时降级 urllib，被拦截概率升高）
+try:
+    from curl_cffi import requests as _curl_requests
+    _HAS_CURL_CFFI = True
+except Exception:
+    _curl_requests = None
+    _HAS_CURL_CFFI = False
 
 # ==============================================================================
 # 一、全局配置
@@ -618,6 +627,25 @@ def get_db():
             year    INTEGER,                        -- 年份（款型年，如 2019）
             engine  TEXT,                           -- 实际使用的模型名
             content TEXT                            -- 报告正文（Markdown）
+        );
+        CREATE TABLE IF NOT EXISTS car_listings (   -- 瓜子二手车真实在售车源（按次搜索抓取）
+            id      INTEGER PRIMARY KEY AUTOINCREMENT,
+            query_id INTEGER,                       -- 关联 car_queries.id
+            title   TEXT,                           -- 车辆全名（品牌+车系+年款+配置）
+            reg_year TEXT,                          -- 上牌年份（如"2019年"）
+            mileage TEXT,                           -- 行驶里程（如"5.2万公里"）
+            city    TEXT,                           -- 车源归属地（如"重庆"）
+            price   REAL,                           -- 当前售价（万元）
+            tag     TEXT,                           -- 核心标签（已检测/严选车/纯电动…）
+            url     TEXT,                           -- 瓜子车源详情页链接
+            img     TEXT,                           -- 车辆展示图 URL
+            first_seen TEXT                         -- 抓取时间
+        );
+        CREATE INDEX IF NOT EXISTS idx_car_listing_q ON car_listings(query_id);
+        CREATE TABLE IF NOT EXISTS car_brands (    -- 瓜子品牌字典缓存（中文名→URL slug）
+            name TEXT,
+            slug TEXT,
+            UNIQUE(name, slug)
         );
         CREATE TABLE IF NOT EXISTS parts_quotes (   -- 配件批发报价（百度爱采购）
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1829,12 +1857,261 @@ def ask_ai(question):
     ])
 
 
+# ==============================================================================
+# 六·B·2、瓜子二手车真实车源抓取（供二手车模块调用）
+# ==============================================================================
+# 数据源说明：瓜子二手车 www.guazi.com，robots.txt 明确 Allow /（并对 LLM 开放
+# llms.txt 与 /car-detail/*.md），城市站/品牌页/车系页均为 SSR 直出车源卡片，
+# 无需登录、无 JS 渲染依赖。反爬策略：
+#   ① curl_cffi 模拟 Chrome TLS 指纹（未安装时降级 urllib，可能被风控拦截）；
+#   ② 全局节流：相邻请求间隔 >= 6 秒（线程锁保护，看板是多线程服务）；
+#   ③ 触发验证码（302 → uc.guazi.com/guazi-mall-ucenter/captcha）时快速失败，
+#     提示用户几分钟后再试，不无限重试加重封锁；
+#   ④ 品牌字典持久化缓存（car_brands 表），正常一次搜索只需 2 次请求。
+
+GUAZI_BASE = "https://www.guazi.com"
+GUAZI_CITY = "cq"                      # 重庆站（业务所在地）
+_GUAZI_MIN_INTERVAL = 6.0              # 相邻请求最小间隔（秒）
+_guazi_lock = threading.Lock()
+_guazi_last_req = [0.0]                # 上次请求时间戳（列表便于在函数内修改）
+
+
+def _guazi_check_blocked(text, final_url=""):
+    """识别瓜子风控验证码页（重定向到 uc.guazi.com 或特征壳页）。"""
+    if "captcha" in (final_url or ""):
+        raise RuntimeError("瓜子二手车触发访问验证（请求过于频繁），请几分钟后再试")
+    if "guazi-mall-ucenter" in text and len(text) < 9000:
+        raise RuntimeError("瓜子二手车触发访问验证（请求过于频繁），请几分钟后再试")
+
+
+def _guazi_get(path, referer=None):
+    """
+    抓取瓜子页面并返回 HTML 文本（utf-8）。
+    path: 以 / 开头的站内路径或完整 URL；自动节流 + 验证码检测。
+    """
+    with _guazi_lock:                  # 节流锁：保证全局相邻请求间隔达标
+        wait = _GUAZI_MIN_INTERVAL - (time.time() - _guazi_last_req[0])
+        if wait > 0:
+            time.sleep(wait)
+        _guazi_last_req[0] = time.time()
+    url = path if path.startswith("http") else GUAZI_BASE + path
+    if _HAS_CURL_CFFI:
+        r = _curl_requests.get(
+            url, impersonate="chrome", timeout=25,
+            headers={"Referer": referer or GUAZI_BASE + "/"})
+        if r.status_code != 200:
+            raise RuntimeError("瓜子返回 HTTP %s" % r.status_code)
+        _guazi_check_blocked(r.text, str(r.url))
+        return r.text
+    # 降级通道：标准库 urllib（无 TLS 指纹伪装；重定向会被自动跟随，无法看
+    # 跳转地址，靠页面内容特征识别验证码）
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
+        "Referer": referer or GUAZI_BASE + "/",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9",
+    })
+    with urllib.request.urlopen(req, timeout=25) as resp:
+        text = resp.read().decode("utf-8", "ignore")
+    _guazi_check_blocked(text)
+    return text
+
+
+def guazi_brands():
+    """
+    品牌字典 {中文名: slug}，持久缓存在 car_brands 表（首次调用抓瓜子城市首页解析）。
+    数据来源：城市首页"热门推荐"区的品牌链接（href="/cq/{slug}/" + title="{名}二手车"）。
+    """
+    conn = get_db()
+    try:
+        rows = conn.execute("SELECT name, slug FROM car_brands").fetchall()
+        if rows:
+            return {r["name"]: r["slug"] for r in rows}
+        text = _guazi_get("/%s/" % GUAZI_CITY)
+        pairs = re.findall(
+            r'href="/(?:%s|putian)/([a-z0-9_-]+)/"[^>]*>\s*<span title="([^"]+)二手车"'
+            % GUAZI_CITY, text)
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        seen = set()
+        for slug, name in pairs:
+            if slug.startswith("price") or (name, slug) in seen:
+                continue               # price{N} 是价格区间入口，不是品牌
+            seen.add((name, slug))
+            conn.execute("INSERT OR IGNORE INTO car_brands(name, slug) VALUES(?,?)",
+                         (name, slug))
+        conn.commit()
+        rows = conn.execute("SELECT name, slug FROM car_brands").fetchall()
+        return {r["name"]: r["slug"] for r in rows}
+    finally:
+        conn.close()
+
+
+def _parse_guazi_cards(html):
+    """
+    解析瓜子品牌页/车系页 SSR 车源卡片，返回字典列表：
+    {title, reg_year, mileage, city, price, tag, url, img}
+    卡片结构（实测 2026-08）：
+      <div class="car-item "><a class="car-item-img" href="/car-detail/c{ID}.html">
+        <img alt="丰田 YARiS L 致炫 2019款 1.5G CVT…" src="https://…png"/>
+        <div class="car-item-info-name">丰田 YARiS L 致炫…</div>
+        <div class="car-item-info-desc">2011年 | 18.3万公里 | 重庆</div>
+        <div class="car-item-info-tag"><span>已检测</span></div>
+        <div class="car-item-info-price">…<span class="car-item-info-price-value">2.87</span>万
+    """
+    cards = []
+    for chunk in html.split('<div class="car-item ')[1:]:
+        m_url = re.search(r'href="(/car-detail/[a-z0-9]+\.html)"', chunk)
+        if not m_url:
+            continue
+        m_img = re.search(r'<img[^>]+src="(https://[^"]+)"', chunk)
+        m_alt = re.search(r'<img[^>]+alt="([^"]+)"', chunk)
+        m_name = re.search(r'car-item-info-name[^>]*>([^<]+)<', chunk)
+        m_desc = re.search(r'car-item-info-desc">(.{0,120}?)</div>', chunk, re.S)
+        m_price = re.search(r'car-item-info-price-value">([\d.]+)<', chunk)
+        m_tag = re.search(r'car-item-info-tag"><span[^>]*>([^<]+)</span>', chunk)
+        # desc 含 React 注释占位符：2011年<!-- --> | <!-- -->18.3万公里<!-- -->|<!-- --> <!-- -->重庆
+        desc = re.sub(r"<!--\s*-->", "", m_desc.group(1)) if m_desc else ""
+        parts = [p.strip() for p in desc.split("|") if p.strip()]
+        try:
+            price = float(m_price.group(1)) if m_price else 0.0
+        except ValueError:
+            price = 0.0
+        cards.append({
+            "title": (m_alt.group(1) if m_alt else (m_name.group(1).strip() if m_name else "")).strip(),
+            "reg_year": parts[0] if parts else "",
+            "mileage": parts[1] if len(parts) > 1 else "",
+            "city": parts[2] if len(parts) > 2 else "",
+            "price": price,
+            "tag": (m_tag.group(1).strip() if m_tag else ""),
+            "url": GUAZI_BASE + m_url.group(1),
+            "img": (m_img.group(1) if m_img else ""),
+        })
+    # 同一车源只保留一条（品牌页两轮搜索可能重复）
+    uniq, seen = [], set()
+    for c in cards:
+        if c["url"] in seen or not c["price"]:
+            continue
+        seen.add(c["url"])
+        uniq.append(c)
+    return uniq
+
+
+def fetch_used_cars(keyword, year=None, max_cards=40):
+    """
+    抓取瓜子二手车（重庆站）真实在售车源。返回 dict：
+      {ok, brand, series, series_url, count, listings: [...], msg}
+    解析流程：关键词 → 品牌 slug（car_brands 缓存）→ 品牌页车系链接匹配车系
+    → 车系页 SSR 车源卡片 → 按年份过滤（匹配不足 3 条时回退全量并说明）。
+    抓取失败不抛异常（由调用方决定是否继续 AI 分析），ok=False 时给 msg。
+    """
+    result = {"ok": False, "brand": "", "series": "", "series_url": "",
+              "count": 0, "listings": [], "msg": ""}
+    try:
+        brands = guazi_brands()
+        if not brands:
+            result["msg"] = "品牌字典为空（瓜子首页解析失败），稍后自动重试"
+            return result
+        brand_name, brand_slug = None, None
+        for name in sorted(brands, key=len, reverse=True):   # 长名优先（"丰田"vs"田"）
+            if name in keyword:
+                brand_name, brand_slug = name, brands[name]
+                break
+        if not brand_slug:
+            result["msg"] = ("未在瓜子品牌字典中识别到品牌（当前收录 %d 个主流品牌，"
+                             "如 大众/丰田/本田/日产/别克/比亚迪 等），请输入「品牌+车型」，"
+                             "如：丰田卡罗拉" % len(brands))
+            return result
+        result["brand"] = brand_name
+
+        rest = keyword.replace(brand_name, "").strip()       # 去掉品牌后的车系关键词
+        brand_path = "/%s/%s/" % (GUAZI_CITY, brand_slug)
+        brand_html = _guazi_get(brand_path)
+
+        # 品牌页含车系链接（<a href="/cq/toyota/kaluola/">卡罗拉</a>），按车系名匹配
+        series_slug, series_name = None, ""
+        for slug, name in re.findall(
+                r'href="/%s/%s/([a-z0-9_-]+)/"[^>]*>([^<]{1,30})</a>'
+                % (GUAZI_CITY, brand_slug), brand_html):
+            name = name.strip()
+            if not name:
+                continue
+            if rest and (rest in name or name in rest) or (not rest and False):
+                series_slug, series_name = slug, name
+                break
+        if series_slug:
+            result["series"] = series_name
+            result["series_url"] = GUAZI_BASE + brand_path + series_slug + "/"
+            html = _guazi_get(brand_path + series_slug + "/",
+                              referer=GUAZI_BASE + brand_path)
+            listings = _parse_guazi_cards(html)
+        else:
+            # 未匹配到车系：用品牌页卡片 + 关键词本地过滤兜底
+            listings = _parse_guazi_cards(brand_html)
+            if rest:
+                listings = [l for l in listings
+                            if rest in l["title"] or rest in (l.get("city") or "")]
+
+        # 年份过滤：标题含"{year}款"或上牌年为该年；匹配过少时回退全量
+        year_matched = []
+        if year:
+            year_matched = [l for l in listings
+                            if ("%d款" % year) in l["title"]
+                            or (l.get("reg_year") or "").startswith(str(year))]
+            if len(year_matched) >= 3:
+                listings = year_matched
+                year_note = ""
+            else:
+                year_note = ("（%s 款车源仅 %d 条，已展示该车系全部在售车源）"
+                             % (year, len(year_matched)))
+        else:
+            year_note = ""
+
+        listings.sort(key=lambda l: l["price"])
+        listings = listings[:max_cards]
+        if not listings:
+            result["msg"] = "瓜子重庆站暂无匹配「%s」的在售车源" % keyword
+            return result
+        result.update({"ok": True, "count": len(listings), "listings": listings,
+                       "msg": year_note})
+        return result
+    except Exception as e:
+        result["msg"] = "车源抓取失败：%s" % str(e)[:100]
+        return result
+
+
+def _listings_prompt(real, city_label="重庆"):
+    """把真实车源整理为注入大模型的提示词片段（无车源时返回空串）。"""
+    if not real.get("ok") or not real.get("listings"):
+        return ""
+    ls = real["listings"]
+    prices = sorted(l["price"] for l in ls if l["price"])
+    miles = []
+    for l in ls:
+        m = re.match(r"([\d.]+)万公里", l.get("mileage") or "")
+        if m:
+            miles.append(float(m.group(1)))
+    mid = prices[len(prices) // 2] if prices else 0
+    stat = (f"共 {len(ls)} 条真实在售车源；售价 {prices[0]:.2f}~{prices[-1]:.2f} 万元，"
+            f"中位数 {mid:.2f} 万元")
+    if miles:
+        stat += f"；里程 {min(miles):.1f}~{max(miles):.1f} 万公里"
+    lines = [f"- {l['title']} ｜ {l['reg_year']} ｜ {l['mileage']} ｜ "
+             f"{l['city']} ｜ {l['price']:.2f}万 ｜ {l['tag'] or '-'}"
+             for l in ls[:20]]
+    return (
+        "\n【瓜子二手车实时车源（%s站，程序刚抓取）】\n%s\n%s\n"
+        "上表为真实在售车源明细（前 20 条）。\n"
+        % (city_label, stat, "\n".join(lines)))
+
+
 def car_market_report(keyword, year):
     """
-    二手车大模型搜索：给定车型关键词 + 年份，让大模型输出该年份下所有版本
-    （配置款式）的当年新车指导价、当前二手价格区间、版本分析，以及面向
-    加纳出口的适配态度与建议。结果写入 car_queries 表并返回
-    (engine, content)。
+    二手车大模型搜索：给定车型关键词 + 年份，先抓取瓜子二手车（重庆站）真实
+    在售车源，再让大模型结合真实数据分析输出：该年份下所有版本（配置款式）
+    的当年新车指导价、当前二手价格区间、版本分析，以及面向加纳出口的适配
+    态度与建议。结果与车源明细分别写入 car_queries / car_listings 表，
+    返回 (engine, content, real)。
     上下文注入最新汇率（USD/CNY、USD/GHS），便于模型直接折算当地货币参考价。
     """
     keyword = (keyword or "").strip()
@@ -1849,6 +2126,18 @@ def car_market_report(keyword, year):
     if not ai_enabled():
         raise RuntimeError("尚未配置大模型 API Key，无法使用二手车搜索（请在 ai_config.json 配置）")
 
+    # 第一步：抓取真实车源（失败不阻断 AI 分析，仅在报告中注明）
+    real = fetch_used_cars(keyword, year)
+    real_note = ""
+    if real.get("ok"):
+        real_note = _listings_prompt(real)
+        if real.get("msg"):
+            real_note += "\n（注：%s）\n" % real["msg"]
+    else:
+        real_note = ("\n【瓜子二手车实时车源】本次抓取未成功：%s\n"
+                     "请仅基于训练知识给出区间，并在开头注明'真实车源暂缺'。\n"
+                     % (real.get("msg") or "未知原因"))
+
     conn = get_db()
     row = conn.execute("SELECT date, usd_cny, usd_ghs FROM rates ORDER BY date DESC LIMIT 1").fetchone()
     conn.close()
@@ -1860,33 +2149,48 @@ def car_market_report(keyword, year):
     prompt = (
         f"请以中国二手车出口加纳业务顾问的身份，检索并分析车型：{keyword}（{year} 款）。\n"
         f"{fx}"
+        f"{real_note}"
         "\n必须输出以下内容（Markdown 格式）：\n"
         f"## 一、{year} 款 {keyword} 全版本价格表\n"
         "列出该年份在中国市场销售的所有版本/配置款式（燃油/混动/两厢三厢等均含）的"
         "当年新车官方指导价（万元），用表格呈现：版本名称｜变速箱｜当年新车指导价｜"
-        "当前二手价格区间（万元，按车况分档）。\n"
+        "当前二手价格区间（万元，按车况分档）。"
+        "若上方提供了真实车源，二手价格区间必须与真实车源对齐（以真实车源为准，"
+        "并注明'基于 N 条在售车源'）；无真实车源时给出知识区间。\n"
         "## 二、各版本分析\n"
         "逐版本点评：动力总成、配置亮点、二手市场流通性/保值率、适合的买家画像。\n"
-        "## 三、出口加纳态度与建议\n"
+        "## 三、真实车源解读与收车建议\n"
+        "若上方提供了真实车源：分析车源结构（年份/里程/价格分布、车况标签），"
+        "点名 2~3 条性价比最高的具体车源（引用其标题与售价），给出目标收购价；"
+        "无真实车源时，基于知识给出适合收购的车况/里程区间与目标收购价。\n"
+        "## 四、出口加纳态度与建议\n"
         "- 逐版本给出出口适配评级（推荐/谨慎/不推荐）及理由：加纳为左舵国家、"
         "路况较差偏好耐用车型、当地热销品牌与保值情况、配件可获得性、排放/车龄限制等；\n"
-        "- 综合建议：适合收购的车况/里程区间、目标收购价（人民币）、"
-        "折算加纳当地参考售价（GHS/USD）、利润空间与风险提示；\n"
+        "- 综合建议：折算加纳当地参考售价（GHS/USD）、利润空间与风险提示；\n"
         "- 建议不得违背四条经营红线。\n"
-        "\n注意：价格信息基于你的训练知识，给出区间而非精确值；"
-        "若某版本数据不确定，如实标注'数据待核'，不要编造。总长 800 字内。"
+        "\n注意：价格信息给出区间而非精确值；若某版本数据不确定，如实标注'数据待核'，"
+        "不要编造。总长 900 字内。"
     )
     content = ai_chat([
         {"role": "system", "content": BUSINESS_BRIEF},
         {"role": "user", "content": prompt},
     ])
     engine = AI_LAST_ENGINE or load_ai_config()["model"]
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     conn = get_db()
-    conn.execute("INSERT INTO car_queries(ts, keyword, year, engine, content) VALUES(?,?,?,?,?)",
-                 (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                  keyword, year, engine, content))
+    cur = conn.execute("INSERT INTO car_queries(ts, keyword, year, engine, content) VALUES(?,?,?,?,?)",
+                       (now, keyword, year, engine, content))
+    query_id = cur.lastrowid
+    # 真实车源入库（关联本次搜索，供历史回看与后续统计复用）
+    if real.get("ok"):
+        for l in real["listings"]:
+            conn.execute(
+                "INSERT INTO car_listings(query_id,title,reg_year,mileage,city,price,tag,url,img,first_seen) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (query_id, l["title"], l["reg_year"], l["mileage"], l["city"],
+                 l["price"], l["tag"], l["url"], l["img"], now))
     conn.commit(); conn.close()
-    return engine, content
+    return engine, content, real
 
 
 # ==============================================================================
@@ -3464,7 +3768,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             conn.close()
             self._send(200, {"items": [dict(r) for r in rows]})
         elif path.startswith("/api/cars/"):
-            # 加载单条二手车报告详情 /api/cars/{id}
+            # 加载单条二手车报告详情 /api/cars/{id}（含关联的真实车源列表）
             try:
                 cid = int(path.split("/api/cars/")[1].split("/")[0])
             except ValueError:
@@ -3473,10 +3777,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
             row = conn.execute(
                 "SELECT id, ts, keyword, year, engine, content FROM car_queries "
                 "WHERE id=?", (cid,)).fetchone()
-            conn.close()
             if not row:
+                conn.close()
                 return self._send(404, {"error": "报告不存在"})
-            self._send(200, dict(row))
+            data = dict(row)
+            data["listings"] = [dict(r) for r in conn.execute(
+                "SELECT title, reg_year, mileage, city, price, tag, url, img "
+                "FROM car_listings WHERE query_id=? ORDER BY price", (cid,))]
+            conn.close()
+            self._send(200, data)
         else:
             # 其余路径按静态资源处理：/css/* /js/* /vendor/* 等（web/ 目录）
             self._serve_static(path)
@@ -3522,16 +3831,22 @@ class DashboardHandler(BaseHTTPRequestHandler):
             answer = ask_ai(body.get("question", ""))
             self._send(200, {"answer": answer})
         elif self.path == "/api/cars/search":
-            # 二手车大模型搜索：请求体 {"keyword": "丰田卡罗拉", "year": 2019}
-            # 大模型调用耗时较久（可能 30~90 秒）
+            # 二手车搜索：先抓瓜子真实车源，再调大模型结合分析
+            # 车源抓取（节流 6s/请求）+ 大模型调用合计耗时约 40~120 秒
             body = self._read_json()
             try:
-                engine, content = car_market_report(
+                engine, content, real = car_market_report(
                     body.get("keyword"), body.get("year"))
                 self._send(200, {"ok": True, "engine": engine, "content": content,
                                  "keyword": (body.get("keyword") or "").strip(),
                                  "year": body.get("year"),
-                                 "ts": datetime.now().strftime("%Y-%m-%d %H:%M")})
+                                 "ts": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                                 "listings": real.get("listings", []),
+                                 "listing_ok": bool(real.get("ok")),
+                                 "listing_msg": real.get("msg", ""),
+                                 "listing_source": ("瓜子二手车·重庆站"
+                                                    + (f"·{real['series']}" if real.get("series") else f"·{real.get('brand') or ''}")
+                                                    if real.get("ok") else "")})
             except ValueError as e:
                 self._send(400, {"error": str(e)})
             except Exception as e:

@@ -743,6 +743,10 @@
         content: '',
         engine: '',
         ts: '',
+        listings: [],            // 瓜子真实在售车源 [{title,reg_year,mileage,city,price,tag,url,img}]
+        listingOk: false,
+        listingMsg: '',          // 车源抓取说明（未识别品牌/限流提示等）
+        listingSource: '',       // 车源来源描述（如"瓜子二手车·重庆站·卡罗拉"）
         history: [],            // [{id, ts, keyword, year, engine}]
       };
     },
@@ -751,14 +755,19 @@
       async search() {
         const kw = this.keyword.trim();
         if (!kw) { ElMessage.warning('请输入车型关键词，如：丰田卡罗拉'); return; }
-        this.searching = true; this.content = '';
+        this.searching = true; this.content = ''; this.listings = []; this.listingMsg = '';
         try {
           const d = await api('/api/cars/search', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ keyword: kw, year: this.year }),
           });
           this.content = d.content; this.engine = d.engine; this.ts = d.ts;
-          ElMessage.success('分析完成');
+          this.listings = d.listings || [];
+          this.listingOk = !!d.listing_ok;
+          this.listingMsg = d.listing_msg || '';
+          this.listingSource = d.listing_source || '';
+          if (this.listings.length) ElMessage.success(`已抓取 ${this.listings.length} 条真实车源，分析完成`);
+          else ElMessage.success('分析完成（未抓到真实车源）');
           this.loadHistory();
         } catch (e) { ElMessage.error('搜索失败: ' + e.message); }
         finally { this.searching = false; }
@@ -774,6 +783,10 @@
           const d = await api('/api/cars/' + h.id);
           this.keyword = d.keyword; this.year = d.year;
           this.content = d.content; this.engine = d.engine; this.ts = d.ts;
+          this.listings = d.listings || [];
+          this.listingOk = this.listings.length > 0;
+          this.listingMsg = this.listings.length ? '' : '该次搜索未抓到真实车源';
+          this.listingSource = this.listings.length ? '瓜子二手车·重庆站' : '';
         } catch (e) { ElMessage.error('加载失败: ' + e.message); }
       },
     },
@@ -783,7 +796,7 @@
       <div class="section-head">
         <div class="kicker">Used Car Export Research</div>
         <h2>二手车行情</h2>
-        <div class="desc">输入车型关键词 + 年份，大模型检索该年款全版本新车指导价 / 二手价格区间 / 版本分析 / 出口加纳态度与建议。</div>
+        <div class="desc">输入「品牌+车型」关键词 + 年份：自动抓取瓜子二手车（重庆站）真实在售车源，大模型结合真实车源分析全版本指导价 / 二手价格区间 / 版本解读 / 出口加纳建议。</div>
       </div>
       <div class="panel">
         <div class="car-search-bar">
@@ -798,19 +811,45 @@
         </div>
         <div v-if="searching" class="car-loading">
           <span class="iconfont icon-robot" style="font-size:20px;color:var(--accent)"></span>
-          大模型检索中，通常需要 30~90 秒，请勿关闭页面…
+          正在抓取瓜子二手车真实车源并调用大模型分析，约 40~120 秒，请勿关闭页面…
         </div>
-        <div v-if="content && !searching">
-          <div class="car-meta">
-            <span class="iconfont icon-robot" style="color:var(--accent)"></span>
-            引擎: {{ engine }} ｜ 生成于 {{ ts }}
-            <span class="car-warn">（价格基于模型知识，仅供参考，成交前须实车核价）</span>
+        <template v-if="!searching">
+          <div v-if="listings.length" class="car-source">
+            <div class="car-source-head">
+              <span class="iconfont icon-truck" style="color:var(--accent)"></span>
+              真实在售车源 · {{ listingSource }} · 共 {{ listings.length }} 条
+              <span v-if="listingMsg" class="car-warn">{{ listingMsg }}</span>
+            </div>
+            <div class="car-source-grid">
+              <a v-for="(c, i) in listings" :key="i" :href="c.url" target="_blank" class="car-card">
+                <div class="car-card-img">
+                  <img v-if="c.img" :src="c.img" loading="lazy" alt="" @error="c.img=''">
+                  <span v-else class="iconfont icon-truck car-card-noimg"></span>
+                </div>
+                <div class="car-card-title" :title="c.title">{{ c.title }}</div>
+                <div class="car-card-desc">{{ c.reg_year }} · {{ c.mileage }} · {{ c.city }}</div>
+                <div class="car-card-bottom">
+                  <span class="car-card-price"><b>{{ c.price }}</b>万</span>
+                  <span v-if="c.tag" class="car-card-tag">{{ c.tag }}</span>
+                </div>
+              </a>
+            </div>
           </div>
-          <div class="md" style="line-height:1.75" v-html="md2html(content)"></div>
-        </div>
-        <div v-else-if="!searching" style="color:var(--text-3);padding:24px 0;text-align:center">
-          输入车型关键词开始检索，历史搜索将自动保存
-        </div>
+          <div v-else-if="listingMsg" class="car-warn-box">
+            <span class="iconfont icon-truck" style="margin-right:6px"></span>{{ listingMsg }}
+          </div>
+          <div v-if="content">
+            <div class="car-meta">
+              <span class="iconfont icon-robot" style="color:var(--accent)"></span>
+              引擎: {{ engine }} ｜ 生成于 {{ ts }}
+              <span class="car-warn">（未标注"基于真实车源"的部分为模型知识，成交前须实车核价）</span>
+            </div>
+            <div class="md" style="line-height:1.75" v-html="md2html(content)"></div>
+          </div>
+          <div v-else style="color:var(--text-3);padding:24px 0;text-align:center">
+            输入车型关键词开始检索，历史搜索将自动保存
+          </div>
+        </template>
       </div>
       <div class="panel" v-if="history.length">
         <h3 class="panel-title"><span class="iconfont icon-clock" style="color:var(--accent)"></span>历史搜索</h3>
