@@ -373,6 +373,29 @@ html.dark .topbar .nav-icon.theme-toggle:hover { color: #ffd60a; }
   color: var(--text-2);
 }
 .md b { color: var(--text); }
+/* Markdown 表格（大模型价格表）：边框 + 表头底色 + 斑马纹，支持横向滚动 */
+.md table {
+  border-collapse: collapse;
+  margin: 10px 0;
+  width: 100%;
+  font-size: 13px;
+  border: 1px solid var(--border);
+}
+.md th, .md td {
+  border: 1px solid var(--border);
+  padding: 7px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+.md th {
+  background: var(--accent-soft);
+  color: var(--text);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.md tbody tr:nth-child(even) { background: var(--panel-2); }
+.md tbody tr:hover { background: var(--accent-soft); }
+.md-table-wrap { overflow-x: auto; }
 
 /* ===== 工具条 ===== */
 .toolbar {
@@ -656,3 +679,36 @@ html.dark .topbar .nav-icon.theme-toggle:hover { color: #ffd60a; }
   background: rgba(184,134,11,.07); border: 1px solid rgba(184,134,11,.25);
   color: #b8860b; font-size: 13px;
 }
+
+/* ===== 二手车模块 · 表格导出 + 利润计算器 ===== */
+.car-meta-actions { margin-left: auto; display: flex; gap: 6px; }
+.car-calc-formula {
+  margin: 4px 0 14px; padding: 10px 14px; border-radius: 8px;
+  background: var(--accent-soft, rgba(48,100,255,.06));
+  border: 1px dashed var(--accent, rgba(48,100,255,.4));
+  color: var(--text-2); font-size: 12.5px; line-height: 1.6;
+}
+.car-calc-form {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px;
+}
+.car-calc-field { display: flex; flex-direction: column; gap: 6px; }
+.car-calc-field label { font-size: 12.5px; color: var(--text-2); }
+.car-calc-field-btn { justify-content: flex-end; }
+.car-calc-result { margin-top: 16px; }
+.car-calc-kpis {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px;
+}
+.car-calc-kpi {
+  padding: 12px 14px; border: 1px solid var(--border, rgba(0,0,0,.08));
+  border-radius: 10px; background: var(--panel-2, #fff);
+}
+.car-calc-kpi span { display: block; font-size: 12px; color: var(--text-3); margin-bottom: 6px; }
+.car-calc-kpi b { font-size: 18px; color: var(--text); font-weight: 700; }
+.car-calc-kpi-profit { border-color: var(--accent, rgba(48,100,255,.4)); }
+.car-profit-pos { color: #e0342c; }  /* 盈利：红（涨/盈利为红，符合中国市场习惯） */
+.car-profit-neg { color: #009B3F; }  /* 亏损：绿 */
+.car-calc-detail {
+  margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px 20px;
+  font-size: 12.5px; color: var(--text-2);
+}
+.car-calc-detail b { font-weight: 700; }

@@ -22,14 +22,44 @@
   function escAttr(s) {
     return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
   }
-  // 简易 Markdown 渲染（标题/列表/引用/加粗）
+  // 简易 Markdown 渲染（标题/列表/引用/加粗/表格）
+  // 新增 GFM 风格表格支持：| 表头 | ... | + |---| 分隔行 → <table>，
+  // 解决大模型输出的价格表（Markdown 表格）此前被渲染为纯文本的问题。
   function md2html(s) {
     const esc = String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    const lines = esc.split('\n');
     const out = [];
     let inUl = false;
-    for (const line of esc.split('\n')) {
+    // 单元格切分：去掉首尾竖线，按 | 拆分并 trim，单元格内同时处理加粗
+    const splitRow = line => {
+      let t = line.trim();
+      if (t.startsWith('|')) t = t.slice(1);
+      if (t.endsWith('|')) t = t.slice(0, -1);
+      return t.split('|').map(c => c.trim().replace(/\*\*(.+?)\*\*/g, '<b>$1</b>'));
+    };
+    const isTableRow = line => /^\s*\|.*\|\s*$/.test(line);
+    const isSepRow = line => /^\s*\|[\s:|-]+\|\s*$/.test(line);
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
       const l = line.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
-      if (/^#{1,3} /.test(l)) {
+      // —— 表格块：当前行是表格行，且下一行是 |---| 分隔行 ——
+      if (isTableRow(line) && i + 1 < lines.length && isSepRow(lines[i + 1])) {
+        if (inUl) { out.push('</ul>'); inUl = false; }
+        const headers = splitRow(line);
+        out.push('<table><thead><tr>');
+        for (const h of headers) out.push('<th>' + h + '</th>');
+        out.push('</tr></thead><tbody>');
+        i += 2;                                   // 跳过表头 + 分隔行
+        while (i < lines.length && isTableRow(lines[i])) {
+          const cells = splitRow(lines[i]);
+          out.push('<tr>');
+          for (const c of cells) out.push('<td>' + c + '</td>');
+          out.push('</tr>');
+          i++;
+        }
+        out.push('</tbody></table>');
+        i--;                                      // 回退，让外层循环处理下一行
+      } else if (/^#{1,3} /.test(l)) {
         if (inUl) { out.push('</ul>'); inUl = false; }
         out.push('<h3>' + l.replace(/^#+ /, '') + '</h3>');
       } else if (/^\s*- /.test(l)) {
@@ -748,10 +778,77 @@
         listingMsg: '',          // 车源抓取说明（未识别品牌/限流提示等）
         listingSource: '',       // 车源来源描述（如"瓜子二手车·重庆站·卡罗拉"）
         history: [],            // [{id, ts, keyword, year, engine}]
+        // 二手车利润计算器
+        pc: {
+          buy_price: '',        // 收购价（人民币，元）
+          domestic_fee: 5000,   // 国内杂费（检测/整备/过户/陆运/报关，元）
+          shipping_fee: 18000,  // 海运费+保险（元）
+          tax_rate: 35,         // 加纳综合税负率（%）
+          sell_price_ghs: '',   // 加纳当地售价（GHS）
+        },
+        pcResult: null,         // /api/cars/calc 返回的测算结果
+        pcCalc: false,          // 利润计算中
+        exporting: '',          // 'png' | 'xlsx' | '' 导出进行中
       };
     },
     methods: {
-      md2html,
+      md2html, fmt, fmtMoney,
+      // 导出报告中的价格表为 PNG 图片（html2canvas 截图）
+      exportTableImage() {
+        const table = this.$el.querySelector('.md table');
+        if (!table) { ElMessage.warning('报告中暂无表格可导出'); return; }
+        this.exporting = 'png';
+        const name = `${this.keyword || '车价表'}-${this.year}-价格表`;
+        try {
+          html2canvas(table, { backgroundColor: '#ffffff', scale: 2 })
+            .then(canvas => {
+              const a = document.createElement('a');
+              a.download = name + '.png';
+              a.href = canvas.toDataURL('image/png');
+              a.click();
+              ElMessage.success('价格表已导出为图片');
+            })
+            .catch(err => ElMessage.error('导出图片失败: ' + err.message))
+            .finally(() => { this.exporting = ''; });
+        } catch (e) { this.exporting = ''; ElMessage.error('导出图片失败: ' + e.message); }
+      },
+      // 导出报告中的价格表为 Excel（SheetJS 生成 .xlsx）
+      exportTableExcel() {
+        const table = this.$el.querySelector('.md table');
+        if (!table) { ElMessage.warning('报告中暂无表格可导出'); return; }
+        this.exporting = 'xlsx';
+        const name = `${this.keyword || '车价表'}-${this.year}-价格表`;
+        try {
+          const ws = XLSX.utils.table_to_sheet(table);
+          const wb = XLSX.utils.book_new();
+          XLSX.utils.book_append_sheet(wb, ws, '价格表');
+          XLSX.writeFile(wb, name + '.xlsx');
+          ElMessage.success('价格表已导出为 Excel');
+        } catch (e) { ElMessage.error('导出 Excel 失败: ' + e.message); }
+        this.exporting = '';
+      },
+      // 二手车出口加纳单台利润测算（调 /api/cars/calc）
+      async calcProfit() {
+        if (this.pc.buy_price === '' || this.pc.sell_price_ghs === '') {
+          ElMessage.warning('请填写收购价和加纳当地售价');
+          return;
+        }
+        this.pcCalc = true;
+        try {
+          const d = await api('/api/cars/calc', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              buy_price: Number(this.pc.buy_price),
+              domestic_fee: Number(this.pc.domestic_fee),
+              shipping_fee: Number(this.pc.shipping_fee),
+              tax_rate: Number(this.pc.tax_rate),
+              sell_price_ghs: Number(this.pc.sell_price_ghs),
+            }),
+          });
+          this.pcResult = d;
+        } catch (e) { ElMessage.error('测算失败: ' + e.message); }
+        finally { this.pcCalc = false; }
+      },
       async search() {
         const kw = this.keyword.trim();
         if (!kw) { ElMessage.warning('请输入车型关键词，如：丰田卡罗拉'); return; }
@@ -843,13 +940,75 @@
               <span class="iconfont icon-robot" style="color:var(--accent)"></span>
               引擎: {{ engine }} ｜ 生成于 {{ ts }}
               <span class="car-warn">（未标注"基于真实车源"的部分为模型知识，成交前须实车核价）</span>
+              <span class="car-meta-actions">
+                <el-button size="small" :loading="exporting==='png'" @click="exportTableImage">
+                  <span class="iconfont icon-image" style="margin-right:4px"></span>导出图片
+                </el-button>
+                <el-button size="small" :loading="exporting==='xlsx'" @click="exportTableExcel">
+                  <span class="iconfont icon-file-earmark-excel" style="margin-right:4px"></span>导出 Excel
+                </el-button>
+              </span>
             </div>
-            <div class="md" style="line-height:1.75" v-html="md2html(content)"></div>
+            <div class="md-table-wrap">
+              <div class="md" style="line-height:1.75" v-html="md2html(content)"></div>
+            </div>
           </div>
           <div v-else style="color:var(--text-3);padding:24px 0;text-align:center">
             输入车型关键词开始检索，历史搜索将自动保存
           </div>
         </template>
+      </div>
+      <div class="panel">
+        <h3 class="panel-title">
+          <span class="iconfont icon-calculator" style="color:var(--accent)"></span>二手车利润计算器
+        </h3>
+        <div class="car-calc-formula">
+          <span class="iconfont icon-info-circle" style="margin-right:4px"></span>
+          参考公式：单台利润 = 加纳当地售价(折人民币) − [收购价 + 国内杂费 + 海运费] × (1 + 加纳综合税负率)
+        </div>
+        <div class="car-calc-form">
+          <div class="car-calc-field">
+            <label>收购价（元）</label>
+            <el-input v-model="pc.buy_price" placeholder="如 70000" @keyup.enter="calcProfit"></el-input>
+          </div>
+          <div class="car-calc-field">
+            <label>国内杂费（元）</label>
+            <el-input v-model="pc.domestic_fee" placeholder="检测/整备/过户/陆运/报关"></el-input>
+          </div>
+          <div class="car-calc-field">
+            <label>海运费（元）</label>
+            <el-input v-model="pc.shipping_fee" placeholder="海运费 + 保险"></el-input>
+          </div>
+          <div class="car-calc-field">
+            <label>加纳综合税负率（%）</label>
+            <el-input v-model="pc.tax_rate" placeholder="默认 35"></el-input>
+          </div>
+          <div class="car-calc-field">
+            <label>加纳当地售价（GHS）</label>
+            <el-input v-model="pc.sell_price_ghs" placeholder="如 150000" @keyup.enter="calcProfit"></el-input>
+          </div>
+          <div class="car-calc-field car-calc-field-btn">
+            <el-button type="primary" :loading="pcCalc" @click="calcProfit" style="width:100%">
+              <span class="iconfont icon-calculator" style="margin-right:4px"></span>测算利润
+            </el-button>
+          </div>
+        </div>
+        <div v-if="pcResult" class="car-calc-result">
+          <div class="car-calc-kpis">
+            <div class="car-calc-kpi"><span>到岸成本 CIF</span><b>{{ fmtMoney(pcResult.cif) }}</b></div>
+            <div class="car-calc-kpi"><span>落地总成本</span><b>{{ fmtMoney(pcResult.total_cost) }}</b></div>
+            <div class="car-calc-kpi"><span>加纳售价(折人民币)</span><b>{{ fmtMoney(pcResult.sell_price_cny) }}</b></div>
+            <div class="car-calc-kpi car-calc-kpi-profit">
+              <span>单台利润</span>
+              <b :class="pcResult.profit >= 0 ? 'car-profit-pos' : 'car-profit-neg'">{{ fmtMoney(pcResult.profit) }}</b>
+            </div>
+          </div>
+          <div class="car-calc-detail">
+            <span>利润率 <b :class="pcResult.profit >= 0 ? 'car-profit-pos' : 'car-profit-neg'">{{ pcResult.profit_rate }}%</b></span>
+            <span>加纳税费 {{ fmtMoney(pcResult.tax_amount) }}（{{ pcResult.tax_rate }}%）</span>
+            <span>汇率 1 GHS ≈ {{ pcResult.ghs_cny }} 元（USD/CNY {{ pcResult.usd_cny }} · USD/GHS {{ pcResult.usd_ghs }}）</span>
+          </div>
+        </div>
       </div>
       <div class="panel" v-if="history.length">
         <h3 class="panel-title"><span class="iconfont icon-clock" style="color:var(--accent)"></span>历史搜索</h3>

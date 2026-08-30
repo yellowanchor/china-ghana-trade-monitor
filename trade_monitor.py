@@ -2193,6 +2193,72 @@ def car_market_report(keyword, year):
     return engine, content, real
 
 
+# 二手车出口加纳利润测算默认参数
+CAR_PROFIT_DEFAULTS = {
+    "tax_rate": 35.0,        # 加纳综合税负率 %（关税 + VAT + 其他杂费，来自方案书表6）
+}
+
+
+def car_profit_calc(p=None):
+    """
+    二手车出口加纳单台利润测算（参考公式）。
+
+    公式（人民币口径，汇率自动取 rates 表最新值）：
+        到岸成本 CIF = 收购价 + 国内杂费 + 海运费
+        落地总成本   = CIF × (1 + 加纳综合税负率)
+        加纳售价     = 当地售价(GHS) × GHS/CNY 汇率
+        单台利润     = 加纳售价(折人民币) − 落地总成本
+        利润率       = 单台利润 / 落地总成本
+
+    参数 p（均可选，缺省为 0）：
+        buy_price      收购价（人民币，元，含过户）
+        domestic_fee   国内杂费（检测/整备/过户/陆运/报关代理，元）
+        shipping_fee   海运费 + 保险（元）
+        tax_rate       加纳综合税负率 %（缺省 35）
+        sell_price_ghs 加纳当地售价（GHS）
+    """
+    p = p or {}
+    buy = float(p.get("buy_price") or 0)
+    dom = float(p.get("domestic_fee") or 0)
+    ship = float(p.get("shipping_fee") or 0)
+    tax = float(p.get("tax_rate")
+                if p.get("tax_rate") not in (None, "")
+                else CAR_PROFIT_DEFAULTS["tax_rate"])
+    sell_ghs = float(p.get("sell_price_ghs") or 0)
+
+    conn = get_db()
+    row = conn.execute("SELECT usd_cny, usd_ghs FROM rates ORDER BY date DESC LIMIT 1").fetchone()
+    conn.close()
+    usd_cny = float(row["usd_cny"]) if row and row["usd_cny"] else 7.2
+    usd_ghs = float(row["usd_ghs"]) if row and row["usd_ghs"] else 15.5
+    ghs_cny = usd_cny / usd_ghs if usd_ghs else 0.0          # 1 GHS = ? 人民币
+
+    cif = buy + dom + ship                                   # 到岸成本
+    tax_amt = cif * tax / 100.0                              # 加纳税费
+    total = cif + tax_amt                                    # 落地总成本
+    sell_cny = sell_ghs * ghs_cny                            # 售价折人民币
+    profit = sell_cny - total                                # 单台利润
+    profit_rate = (profit / total * 100.0) if total else 0.0
+
+    return {
+        "buy_price": round(buy, 2),
+        "domestic_fee": round(dom, 2),
+        "shipping_fee": round(ship, 2),
+        "cif": round(cif, 2),
+        "tax_rate": round(tax, 2),
+        "tax_amount": round(tax_amt, 2),
+        "total_cost": round(total, 2),
+        "sell_price_ghs": round(sell_ghs, 2),
+        "sell_price_cny": round(sell_cny, 2),
+        "sell_price_usd": round(sell_cny / usd_cny, 2) if usd_cny else 0.0,
+        "profit": round(profit, 2),
+        "profit_rate": round(profit_rate, 2),
+        "ghs_cny": round(ghs_cny, 4),
+        "usd_cny": round(usd_cny, 4),
+        "usd_ghs": round(usd_ghs, 4),
+    }
+
+
 # ==============================================================================
 # 六·C、合同审核模块（AI 审合同，默认优先 DeepSeek）
 # ==============================================================================
@@ -3851,6 +3917,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send(400, {"error": str(e)})
             except Exception as e:
                 self._send(502, {"error": "大模型调用失败：%s" % str(e)[:120]})
+        elif self.path == "/api/cars/calc":
+            # 二手车出口加纳单台利润测算：请求体 {buy_price, domestic_fee, shipping_fee, tax_rate, sell_price_ghs}
+            body = self._read_json()
+            try:
+                self._send(200, car_profit_calc(body))
+            except (ValueError, TypeError) as e:
+                self._send(400, {"error": "参数无效：%s" % str(e)})
         elif self.path == "/api/goods":
             # 保存商品到 goods 表：请求体 {name, sku, category, unit_price, ...}
             body = self._read_json()
