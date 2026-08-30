@@ -800,9 +800,12 @@ def get_db():
 # 三、数据采集：汇率
 # ==============================================================================
 
-def fetch_rates():
-    """抓取美元兑人民币/塞地汇率，写入 rates 表。返回 (是否成功, 摘要文本)。"""
+def fetch_rates(skip_if_exists=False):
+    """抓取美元兑人民币/塞地汇率，写入 rates 表。返回 (是否成功, 摘要文本)。
+    skip_if_exists=True 时，若当日汇率已入库则跳过请求（每日自动调度用，避免重复调用 API）。"""
     today = datetime.now().strftime("%Y-%m-%d")
+    if skip_if_exists and _has_rate(today):
+        return True, "当日汇率已存在，跳过采集"
     req = urllib.request.Request(RATE_API, headers={"User-Agent": "Mozilla/5.0"})
     try:
         with urllib.request.urlopen(req, timeout=20) as resp:
@@ -1105,12 +1108,21 @@ class LinkExtractor(HTMLParser):
             self._text = []
 
 
-def fetch_policies():
-    """遍历政策源，抓取新闻标题入库，返回各源摘要列表。"""
+def fetch_policies(skip_if_exists=False):
+    """遍历政策源，抓取新闻标题入库，返回各源摘要列表。
+    skip_if_exists=True 时，某源当日已成功抓取过则直接跳过（每日自动调度用，避免重复请求）。"""
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    today = now[:10]
     summary = []
     conn = get_db()
     for src in POLICY_SOURCES:
+        if skip_if_exists:
+            done = conn.execute(
+                "SELECT 1 FROM fetch_log WHERE source=? AND ok=1 AND ts LIKE ? LIMIT 1",
+                (src["name"], today + "%")).fetchone()
+            if done:
+                summary.append((src["name"], True, "已跳过（当日已抓取）"))
+                continue
         try:
             raw = http_get(src["url"])
             # 自动尝试常见编码（政府网站多为 utf-8 或 gbk）
@@ -1160,6 +1172,70 @@ def run_fetch():
     for kw, ok, msg in fetch_parts():
         print(f"[配件·{kw}] {'成功' if ok else '失败'}: {msg}")
     print("=" * 60)
+
+
+# ==============================================================================
+# 四·四、每日自动采集调度（系统在线期间由后台守护线程按点触发）
+# ==============================================================================
+
+# 每日自动采集时间表：time 用 24 小时制 "HH:MM"。
+#   · 汇率      00:05 —— 凌晨 12 点刚过即刷新（"每天到凌晨12点自动刷新汇率"）
+#   · 新闻/政策 06:30 —— 日报发行前抓取，保证当日日报能含最新政策要闻
+#   · 配件报价  06:40 —— 低频采集（爱采购有 403 频率封锁，每天仅一次）
+# 每项任务每天只执行一次，且「当天已抓取则跳过」，避免重复请求外部源。
+AUTO_FETCH_SCHEDULE = [
+    {"time": "00:05", "task": "rates",    "desc": "汇率刷新"},
+    {"time": "06:30", "task": "policies", "desc": "新闻/政策抓取"},
+    {"time": "06:40", "task": "parts",    "desc": "配件报价抓取"},
+]
+
+
+def _run_scheduled_task(schedule):
+    """执行单个调度任务（在独立线程中运行，不阻塞调度循环）。"""
+    task, desc = schedule["task"], schedule["desc"]
+    print(f"[自动采集] {desc} 触发 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    try:
+        if task == "rates":
+            ok, msg = fetch_rates(skip_if_exists=True)
+            print(f"[自动采集·汇率] {'成功' if ok else '失败'}: {msg}")
+        elif task == "policies":
+            for name, ok, msg in fetch_policies(skip_if_exists=True):
+                print(f"[自动采集·{name}] {'成功' if ok else '失败'}: {msg}")
+        elif task == "parts":
+            for kw, ok, msg in fetch_parts(skip_if_exists=True):
+                print(f"[自动采集·配件 {kw}] {'成功' if ok else '失败'}: {msg}")
+    except Exception as e:
+        print(f"[自动采集·{desc}] 异常: {str(e)[:160]}")
+
+
+def _auto_fetch_scheduler():
+    """
+    后台守护线程：每 30 秒检查一次当前时间，命中 AUTO_FETCH_SCHEDULE 中的时间点
+    且该项今日尚未执行时，派发子线程执行（带 skip_if_exists 去重）。
+    仅在系统（服务进程）在线期间生效；进程退出后线程随之结束。
+    """
+    done = {}                                    # {task: "YYYY-MM-DD"} 记录当日是否已触发
+    while True:
+        now = datetime.now()
+        hhmm = now.strftime("%H:%M")
+        today = now.strftime("%Y-%m-%d")
+        for schedule in AUTO_FETCH_SCHEDULE:
+            if hhmm == schedule["time"] and done.get(schedule["task"]) != today:
+                done[schedule["task"]] = today
+                threading.Thread(target=_run_scheduled_task, args=(schedule,),
+                                 daemon=True, name="auto-fetch-" + schedule["task"]).start()
+        time.sleep(30)
+
+
+def start_auto_fetch_scheduler():
+    """在 serve() 中调用：启动每日自动采集守护线程（可用环境变量 TM_AUTO_FETCH=0 关闭）。"""
+    enabled = os.environ.get("TM_AUTO_FETCH", "1").strip().lower() not in ("0", "false", "no", "off")
+    if not enabled:
+        print("[自动采集] 已通过 TM_AUTO_FETCH 环境变量关闭")
+        return
+    threading.Thread(target=_auto_fetch_scheduler, daemon=True, name="auto-fetch-scheduler").start()
+    times = "、".join(f"{s['desc']} {s['time']}" for s in AUTO_FETCH_SCHEDULE)
+    print(f"[自动采集] 每日调度已启动（{times}，已抓取自动跳过）")
 
 
 # ==============================================================================
@@ -1376,7 +1452,7 @@ def _search_1688(kw, page_size=40):
     return out
 
 
-def fetch_parts(keywords=None, save_top=30):
+def fetch_parts(keywords=None, save_top=30, skip_if_exists=False):
     """
     抓取配件批发报价，写入 parts_quotes 表。多源适配（ai_config.json 的 parts_source）：
       · "aigou"（默认）— 百度爱采购 b2b.baidu.com 页面采集。数据源说明：爱采购聚合了
@@ -1389,12 +1465,22 @@ def fetch_parts(keywords=None, save_top=30):
              ② 单价 ∈ [1, 10000]，且落在中位数价格带宽 [中位数/5, 中位数×5] 内，
                剔除搜索页混入的其他商品异常价格；
              ③ 过滤后按价格升序入库。
+    skip_if_exists=True 时，当日已抓取过（parts_quotes.first_seen 为今天）则整体跳过，
+    避免重复触发爱采购（该站有 403 频率封锁风险）。
     返回 [(关键词, 是否成功, 摘要), ...]
     """
     keywords = keywords or PART_KEYWORDS
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    today = now[:10]
     conn = get_db()
     summary = []
+    if skip_if_exists:
+        done = conn.execute(
+            "SELECT 1 FROM parts_quotes WHERE first_seen LIKE ? LIMIT 1",
+            (today + "%",)).fetchone()
+        if done:
+            conn.close()
+            return [(kw, True, "已跳过（当日已抓取）") for kw in keywords]
 
     def _search(query):
         """单次爱采购搜索，返回商品对象列表；遇 403/429 限流自动退避重试。"""
@@ -4293,6 +4379,7 @@ def serve(host=None, port=None, open_browser=True):
         print(f"[汇率同步] 启动同步失败（不影响看板启动）: {e}")
     print(f"看板已启动：http://{h}:{p}  （{'浏览器将自动打开，' if open_browser else ''}Ctrl+C 退出）")
     server = ThreadingHTTPServer((h, p), DashboardHandler)
+    start_auto_fetch_scheduler()   # 启动每日自动采集守护线程（汇率/新闻/配件，已抓取自动跳过）
     if open_browser:
         webbrowser.open(f"http://{h}:{p}")
     try:
