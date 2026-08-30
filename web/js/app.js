@@ -433,6 +433,10 @@
       window.removeEventListener('themechange', this.onTheme);
       if (this.chart) { this.chart.dispose(); this.chart = null; }
     },
+    activated() {
+      // keep-alive 切回本视图时 DOM 重新插入，图表需 resize 适应容器尺寸
+      if (this.chart) this.$nextTick(() => this.chart.resize());
+    },
     watch: { rates() { this.$nextTick(() => this.render()); } },
     template: `
     <div class="content-inner">
@@ -1773,6 +1777,27 @@
         return r ? `USD/CNY ${r.usd_cny.toFixed(4)}｜USD/GHS ${r.usd_ghs.toFixed(4)}` : '暂无汇率数据';
       },
       rateTip() { return '最新汇率：USD/CNY 美元兑人民币 ｜ USD/GHS 美元兑加纳塞地'; },
+      // 当前激活视图对应的组件名（供 keep-alive 动态切换，切换不销毁组件、后台任务不中断）
+      activeComponent() {
+        const map = {
+          overview: 'OverviewView', rates: 'RatesView', policies: 'PoliciesView',
+          parts: 'PartsView', ai: 'AiReportView', cars: 'CarView',
+          contract: 'ContractView', calculator: 'CalculatorView',
+        };
+        return map[this.activeView] || 'OverviewView';
+      },
+      // 各视图所需的 props（按 activeView 动态注入）
+      viewProps() {
+        const s = this.summary;
+        switch (this.activeView) {
+          case 'overview': return { summary: s };
+          case 'rates': return { rates: s.rates, latest: s.latest_rate };
+          case 'policies': return { policies: s.policies };
+          case 'ai': return { lastReport: s.last_report, aiEnabled: s.ai_enabled };
+          case 'calculator': return { defaults: s.calc_defaults, defaultItem: s.calc_default_item, categories: s.categories };
+          default: return {};
+        }
+      },
     },
     methods: {
       async loadMe() {
@@ -1895,14 +1920,9 @@
           </div>
         </el-aside>
         <el-main class="content" v-loading="loading">
-          <OverviewView v-if="activeView === 'overview'" :summary="summary" @refresh="loadSummary" />
-          <RatesView v-else-if="activeView === 'rates'" :rates="summary.rates" :latest="summary.latest_rate" />
-          <PoliciesView v-else-if="activeView === 'policies'" :policies="summary.policies" />
-          <PartsView v-else-if="activeView === 'parts'" />
-          <AiReportView v-else-if="activeView === 'ai'" :last-report="summary.last_report" :ai-enabled="summary.ai_enabled" />
-          <CarView v-else-if="activeView === 'cars'" />
-          <ContractView v-else-if="activeView === 'contract'" />
-          <CalculatorView v-else :defaults="summary.calc_defaults" :default-item="summary.calc_default_item" :categories="summary.categories" />
+          <keep-alive>
+            <component :is="activeComponent" v-bind="viewProps" @refresh="loadSummary" />
+          </keep-alive>
         </el-main>
       </el-container>
       <el-dialog v-model="settingsVisible" title="账号设置" width="460px" :close-on-click-modal="false" append-to-body>
