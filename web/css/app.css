@@ -712,3 +712,17 @@ html.dark .topbar .nav-icon.theme-toggle:hover { color: #ffd60a; }
   font-size: 12.5px; color: var(--text-2);
 }
 .car-calc-detail b { font-weight: 700; }
+
+/* ===== AI 模型选择器 ===== */
+.model-select { width: 150px; }
+.model-select .model-free-tag {
+  font-size: 10px; padding: 0 5px; border-radius: 8px;
+  background: rgba(0,155,63,.12); color: #009B3F; margin-left: 6px;
+}
+.model-select .model-off-tag {
+  font-size: 10px; padding: 0 5px; border-radius: 8px;
+  background: var(--accent-soft, rgba(48,100,255,.08)); color: var(--text-3); margin-left: 6px;
+}
+.model-select .model-quota {
+  font-size: 11px; color: var(--text-3); margin-left: 8px;
+}

@@ -300,6 +300,18 @@ def ai_enabled():
     return bool(load_ai_config().get("api_key", "").strip())
 
 
+# 已知 AI 模型元数据（前端「选择模型」下拉展示用）。
+# quota 为参考额度信息，实际以各平台账户为准；仅配置了对应 Key 的模型才真正可用。
+AI_MODEL_META = [
+    {"id": "glm-4.7-flash", "name": "智谱 GLM-4.7-Flash", "vendor": "智谱AI",
+     "free": True, "ctx": "200K", "quota": "永久免费"},
+    {"id": "deepseek-chat", "name": "DeepSeek Chat", "vendor": "DeepSeek",
+     "free": False, "ctx": "128K", "quota": "按量付费"},
+    {"id": "qwen-plus", "name": "通义千问 Plus", "vendor": "阿里云",
+     "free": False, "ctx": "128K", "quota": "按量付费"},
+]
+
+
 # ==============================================================================
 # 一.x 认证、会话与密码可逆加密（两级）
 # ------------------------------------------------------------------------------
@@ -1759,10 +1771,30 @@ def _ai_providers():
     return providers
 
 
-def ai_chat(messages):
+def list_ai_models():
+    """返回可用 AI 模型列表（含额度元数据 + 是否已配置 Key），供前端选择器展示。"""
+    providers = _ai_providers()
+    available_ids = {p["model"] for p in providers}
+    models = []
+    for meta in AI_MODEL_META:
+        m = dict(meta)
+        m["available"] = m["id"] in available_ids
+        models.append(m)
+    # 配置里存在但元数据未收录的模型，补一条（保证用户自定义模型也能选）
+    for pid in available_ids:
+        if pid not in {m["id"] for m in models}:
+            models.append({"id": pid, "name": pid, "vendor": "", "free": False,
+                           "ctx": "", "quota": "", "available": True})
+    default = load_ai_config().get("model") or "glm-4.7-flash"
+    return {"models": models, "default": default, "enabled": bool(available_ids)}
+
+
+def ai_chat(messages, model=None):
     """
     调用 OpenAI 兼容的 /chat/completions 接口（多通道自动容灾）。
     messages: [{"role": "system"/"user"/"assistant", "content": "..."}, ...]
+    model: 指定模型 id（如 "deepseek-chat"）；指定时该模型通道排最前优先使用，
+           失败仍按剩余通道容灾兜底。缺省则按配置顺序（主通道 → fallbacks）。
     - 主通道失败（超时/网络错误）时按 fallbacks 顺序切换备用通道；
     - 遇限流/过载（HTTP 429/5xx、智谱 1302/1305）在通道内退避重试 2 次；
     - 支持 provider 配置 extra_body（如智谱 {"thinking":{"type":"disabled"}}）；
@@ -1774,6 +1806,10 @@ def ai_chat(messages):
     providers = _ai_providers()
     if not providers:
         raise RuntimeError("未配置任何可用的 AI API Key")
+    if model:
+        # 指定模型优先：命中的通道排前面，其余通道作容灾兜底
+        providers = [p for p in providers if p["model"] == model] + \
+                    [p for p in providers if p["model"] != model]
     last_err = None
     for pv in providers:
         url = pv["base_url"].rstrip("/") + "/chat/completions"
@@ -1848,10 +1884,10 @@ def build_daily_context():
             "new_policies_today": new_policies, "key_policies": key_policies}
 
 
-def generate_ai_report():
+def generate_ai_report(model=None):
     """
     生成当日分析日报（优先大模型，未配 Key 或调用失败时降级为规则引擎）。
-    日报写入 ai_reports 表并返回 (engine, content)。
+    model: 指定模型 id（缺省自动容灾）。日报写入 ai_reports 表并返回 (engine, content)。
     """
     ctx = build_daily_context()
     if ai_enabled():
@@ -1872,7 +1908,7 @@ def generate_ai_report():
             content = ai_chat([
                 {"role": "system", "content": BUSINESS_BRIEF},
                 {"role": "user", "content": prompt},
-            ])
+            ], model=model)
             engine = AI_LAST_ENGINE or load_ai_config()["model"]
         except Exception as e:
             content = rule_report(ctx) + f"\n\n> ⚠️ 大模型调用失败（{str(e)[:80]}），已降级为规则引擎。"
@@ -1921,10 +1957,10 @@ def rule_report(ctx):
     return "\n".join(lines)
 
 
-def ask_ai(question):
+def ask_ai(question, model=None):
     """
     基于政策库的智能问答：把近期政策条目注入上下文，让 AI 有据回答。
-    未配置 Key 时返回提示信息。
+    未配置 Key 时返回提示信息。model 指定模型 id（缺省自动容灾）。
     """
     if not ai_enabled():
         return ("尚未配置大模型 API Key。请编辑 ai_config.json 填入 api_key"
@@ -1940,7 +1976,7 @@ def ask_ai(question):
     return ai_chat([
         {"role": "system", "content": BUSINESS_BRIEF},
         {"role": "user", "content": prompt},
-    ])
+    ], model=model)
 
 
 # ==============================================================================
@@ -2191,7 +2227,7 @@ def _listings_prompt(real, city_label="重庆"):
         % (city_label, stat, "\n".join(lines)))
 
 
-def car_market_report(keyword, year):
+def car_market_report(keyword, year, model=None):
     """
     二手车大模型搜索：给定车型关键词 + 年份，先抓取瓜子二手车（重庆站）真实
     在售车源，再让大模型结合真实数据分析输出：该年份下所有版本（配置款式）
@@ -2199,6 +2235,7 @@ def car_market_report(keyword, year):
     态度与建议。结果与车源明细分别写入 car_queries / car_listings 表，
     返回 (engine, content, real)。
     上下文注入最新汇率（USD/CNY、USD/GHS），便于模型直接折算当地货币参考价。
+    model 指定模型 id（缺省自动容灾）。
     """
     keyword = (keyword or "").strip()
     if not keyword:
@@ -2260,7 +2297,7 @@ def car_market_report(keyword, year):
     content = ai_chat([
         {"role": "system", "content": BUSINESS_BRIEF},
         {"role": "user", "content": prompt},
-    ])
+    ], model=model)
     engine = AI_LAST_ENGINE or load_ai_config()["model"]
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     conn = get_db()
@@ -3112,14 +3149,18 @@ def _ai_providers_deepseek_first():
     return providers
 
 
-def ai_chat_deepseek_first(messages):
+def ai_chat_deepseek_first(messages, model=None):
     """调用 AI（DeepSeek 优先），多通道容灾。
     与 ai_chat() 逻辑相同，但通道顺序改为 DeepSeek 优先。
+    model 指定时该模型通道排最前（覆盖 DeepSeek 优先顺序），失败仍容灾兜底。
     """
     global AI_LAST_ENGINE
     providers = _ai_providers_deepseek_first()
     if not providers:
         raise RuntimeError("未配置任何可用的 AI API Key")
+    if model:
+        providers = [p for p in providers if p["model"] == model] + \
+                    [p for p in providers if p["model"] != model]
     last_err = None
     for pv in providers:
         url = pv["base_url"].rstrip("/") + "/chat/completions"
@@ -3166,10 +3207,11 @@ def ai_chat_deepseek_first(messages):
     raise last_err
 
 
-def ai_contract_review(contract_text):
+def ai_contract_review(contract_text, model=None):
     """
     AI 审核合同文本（DeepSeek 优先）。
     contract_text: 用户粘贴的合同全文
+    model: 指定模型 id（缺省 DeepSeek 优先）
     返回 (engine, review_result, risk_level, risk_score)
     """
     if not ai_enabled():
@@ -3183,7 +3225,7 @@ def ai_contract_review(contract_text):
         result = ai_chat_deepseek_first([
             {"role": "system", "content": CONTRACT_REVIEW_SYSTEM},
             {"role": "user", "content": prompt},
-        ])
+        ], model=model)
         engine = AI_LAST_ENGINE or "deepseek-chat"
         risk_level, risk_score = _parse_contract_risk(result)
         return (engine, result, risk_level, risk_score)
@@ -3566,11 +3608,12 @@ def save_goods(g):
     return gid
 
 
-def ai_quote_predict(items, params, manual_result, usd_cny):
+def ai_quote_predict(items, params, manual_result, usd_cny, model=None):
     """
     AI 报价预测：基于商品清单、费用参数、市场上下文，让大模型预测最优加价率/报价。
     与人工报价对比，返回预测结果 + 推理过程。
     未配置 AI Key 时降级为规则引擎（基于品类平均利润率推荐）。
+    model 指定模型 id（缺省自动容灾）。
     """
     # 构建市场上下文
     ctx = build_daily_context()
@@ -3615,7 +3658,7 @@ def ai_quote_predict(items, params, manual_result, usd_cny):
             raw = ai_chat([
                 {"role": "system", "content": BUSINESS_BRIEF},
                 {"role": "user", "content": prompt},
-            ])
+            ], model=model)
             # 尝试解析 JSON（AI可能包裹 markdown code block）
             clean = raw.strip()
             if clean.startswith("```"):
@@ -3806,6 +3849,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send(404, {"error": "echarts.min.js not found"})
         elif self.path.startswith("/api/summary"):
             self._send(200, build_summary())
+        elif self.path.startswith("/api/ai/models"):
+            # 可用 AI 模型列表（含额度元数据 + 是否已配置 Key），供前端选择器
+            self._send(200, list_ai_models())
         elif self.path.startswith("/api/calc"):
             # GET 兼容旧版单商品测算（?unit_price=..&quantity=..）
             q = {k: float(v[0]) for k, v in
@@ -3966,8 +4012,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send(200, {"ok": ok, "msg": msg, "keyword": kw_,
                              "source": parts_source()})
         elif self.path == "/api/analyze":
-            # 生成 AI/规则引擎日报（大模型调用可能耗时较久）
-            engine, content = generate_ai_report()
+            # 生成 AI/规则引擎日报（大模型调用可能耗时较久）；可选 {"model": "..."} 指定模型
+            body = self._read_json()
+            engine, content = generate_ai_report(model=body.get("model"))
             self._send(200, {"engine": engine, "content": content,
                              "ts": datetime.now().strftime("%Y-%m-%d %H:%M")})
         elif self.path == "/api/calc":
@@ -3978,9 +4025,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             conn.close()
             self._send(200, calc_profit(body, usd_cny=row["usd_cny"] if row else 7.2))
         elif self.path == "/api/ask":
-            # 基于政策库的智能问答，请求体 {"question": "..."}
+            # 基于政策库的智能问答，请求体 {"question": "...", "model": "..."}
             body = self._read_json()
-            answer = ask_ai(body.get("question", ""))
+            answer = ask_ai(body.get("question", ""), model=body.get("model"))
             self._send(200, {"answer": answer})
         elif self.path == "/api/cars/search":
             # 二手车搜索：先抓瓜子真实车源，再调大模型结合分析
@@ -3988,7 +4035,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             body = self._read_json()
             try:
                 engine, content, real = car_market_report(
-                    body.get("keyword"), body.get("year"))
+                    body.get("keyword"), body.get("year"), model=body.get("model"))
                 self._send(200, {"ok": True, "engine": engine, "content": content,
                                  "keyword": (body.get("keyword") or "").strip(),
                                  "year": body.get("year"),
@@ -4024,7 +4071,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 body.get("result", {}), body.get("note", ""))
             self._send(200, {"id": qid, "ok": True})
         elif self.path == "/api/quote/ai-predict":
-            # AI 报价预测对比：请求体 {items, params, result}
+            # AI 报价预测对比：请求体 {items, params, result, model}
             body = self._read_json()
             items = body.get("items", [])
             params = body.get("params", {})
@@ -4033,7 +4080,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             row = conn.execute("SELECT usd_cny FROM rates ORDER BY date DESC LIMIT 1").fetchone()
             conn.close()
             usd_cny = row["usd_cny"] if row else 7.2
-            prediction = ai_quote_predict(items, params, manual_result, usd_cny)
+            prediction = ai_quote_predict(items, params, manual_result, usd_cny,
+                                          model=body.get("model"))
             self._send(200, prediction)
         elif self.path == "/api/vision/review":
             # 用户纠正配件图像校验：请求体 {parts_id, label}
@@ -4069,14 +4117,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 msg = m
             self._send(200, {"ok": True, "msg": msg, "old_img_ok": old_ok, "new_img_ok": new_ok})
         elif self.path == "/api/contract/review":
-            # AI 审核合同：请求体 {"title": "...", "content": "..."}
+            # AI 审核合同：请求体 {"title": "...", "content": "...", "model": "..."}
             body = self._read_json()
             title = (body.get("title") or "").strip() or "未命名合同"
             content = (body.get("content") or "").strip()
             if not content:
                 self._send(400, {"error": "合同内容不能为空"})
                 return
-            engine, result, risk_level, risk_score = ai_contract_review(content)
+            engine, result, risk_level, risk_score = ai_contract_review(
+                content, model=body.get("model"))
             cid = save_contract_review(title, content, result, engine, risk_level, risk_score)
             self._send(200, {"id": cid, "engine": engine, "review": result,
                              "risk_level": risk_level, "risk_score": risk_score,

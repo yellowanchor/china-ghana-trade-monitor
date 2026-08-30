@@ -91,6 +91,43 @@
     return data !== null ? data : res;
   }
 
+  /* ---------------- AI 模型选择（全局共享） ----------------
+     各 AI 部分（日报/问答/二手车/合同/报价预测）共用同一份模型列表，
+     首次登录后加载一次；下拉默认「自动选择」（后端自动容灾），可选具体模型。
+  */
+  const aiModelStore = reactive({ models: [], loaded: false });
+  async function loadAiModels() {
+    try {
+      const d = await api('/api/ai/models');
+      aiModelStore.models = d.models || [];
+      aiModelStore.loaded = true;
+    } catch (e) { aiModelStore.loaded = true; /* 加载失败不阻塞 */ }
+  }
+  // 可复用模型选择器（v-model 绑定模型 id，空串 = 自动）
+  const ModelSelect = {
+    props: { modelValue: { type: String, default: '' } },
+    emits: ['update:modelValue'],
+    computed: {
+      models() { return aiModelStore.models; },
+    },
+    methods: {
+      onInput(v) { this.$emit('update:modelValue', v || ''); },
+    },
+    template: `
+      <el-select :model-value="modelValue" size="small" class="model-select"
+                 @update:model-value="onInput" :placeholder="'自动'">
+        <el-option label="自动选择" value="" />
+        <el-option v-for="m in models" :key="m.id" :value="m.id"
+          :label="(m.name || m.id) + (m.free ? ' · 免费' : '')"
+          :disabled="!m.available">
+          <span>{{ m.name || m.id }}</span>
+          <span v-if="m.free" class="model-free-tag">免费</span>
+          <span v-else-if="!m.available" class="model-off-tag">未配置</span>
+          <span v-if="m.quota" class="model-quota">{{ m.quota }}</span>
+        </el-option>
+      </el-select>`,
+  };
+
   /* ---------------- 主题管理 ----------------
      模式三态：auto（跟随系统，默认）/ light（白天）/ dark（夜晚）
      - 持久化到 localStorage('tm-theme')
@@ -693,14 +730,17 @@
   const AiReportView = {
     props: { lastReport: Object, aiEnabled: Boolean },
     data() {
-      return { content: '', engine: '', ts: '', generating: false, question: '', answer: '', asking: false };
+      return { content: '', engine: '', ts: '', generating: false, question: '', answer: '', asking: false, model: '' };
     },
     methods: {
       md2html,
       async generate() {
         this.generating = true;
         try {
-          const d = await api('/api/analyze', { method: 'POST' });
+          const d = await api('/api/analyze', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: this.model }),
+          });
           this.content = d.content; this.engine = d.engine; this.ts = d.ts;
           ElMessage.success('日报已生成');
         } catch (e) { ElMessage.error('生成失败: ' + e.message); }
@@ -713,7 +753,7 @@
         try {
           const d = await api('/api/ask', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ question: q }),
+            body: JSON.stringify({ question: q, model: this.model }),
           });
           this.answer = d.answer;
         } catch (e) { this.answer = '提问失败: ' + e.message; }
@@ -732,6 +772,7 @@
       </div>
       <div class="panel">
         <div class="toolbar" style="margin-bottom:10px">
+          <ModelSelect v-model="model" />
           <el-button type="primary" :loading="generating" @click="generate">
             <span class="iconfont icon-robot" style="margin-right:6px"></span>生成当日日报
           </el-button>
@@ -748,6 +789,7 @@
       <div class="panel">
         <h3 class="panel-title"><span class="iconfont icon-chat-dots" style="color:var(--accent)"></span>政策智能问答</h3>
         <div style="display:flex;gap:10px">
+          <ModelSelect v-model="model" />
           <el-input v-model="question" placeholder="如：近期有哪些与出口退税相关的政策？" clearable @keyup.enter="ask"></el-input>
           <el-button type="primary" :loading="asking" @click="ask">
             <span class="iconfont icon-search" style="margin-right:6px"></span>提问
@@ -769,6 +811,7 @@
         keyword: '',
         year: now - 3,          // 默认 3 年车龄（二手出口主力）
         years,
+        model: '',              // AI 模型选择（空=自动容灾）
         searching: false,
         content: '',
         engine: '',
@@ -856,7 +899,7 @@
         try {
           const d = await api('/api/cars/search', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ keyword: kw, year: this.year }),
+            body: JSON.stringify({ keyword: kw, year: this.year, model: this.model }),
           });
           this.content = d.content; this.engine = d.engine; this.ts = d.ts;
           this.listings = d.listings || [];
@@ -902,6 +945,7 @@
           <el-select v-model="year" size="large" style="width:110px">
             <el-option v-for="y in years" :key="y" :label="y + ' 款'" :value="y"></el-option>
           </el-select>
+          <ModelSelect v-model="model" />
           <el-button type="primary" size="large" :loading="searching" @click="search">
             <span class="iconfont icon-search" style="margin-right:6px"></span>大模型搜索
           </el-button>
@@ -1043,6 +1087,7 @@
         templates: { zh: '', en: '' },
         downloading: false,
         reviewing: false,
+        model: '',              // AI 模型选择（空=DeepSeek 优先）
         result: null,          // {engine, review, risk_level, risk_score, ts, id}
         showHistory: false,
         history: [],
@@ -1138,7 +1183,7 @@
         try {
           this.result = await api('/api/contract/review', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ title: this.title, content: this.content }),
+            body: JSON.stringify({ title: this.title, content: this.content, model: this.model }),
           });
           ElMessage.success('AI 合同审核完成');
         } catch (e) { ElMessage.error('审核失败: ' + e.message); }
@@ -1199,6 +1244,7 @@
             <el-button @click="downloadPdf" :loading="downloading">
               <span class="iconfont icon-download" style="margin-right:6px"></span>下载 PDF
             </el-button>
+            <ModelSelect v-model="model" />
             <el-button type="primary" :loading="reviewing" :disabled="!canReview" @click="doReview">
               <span class="iconfont icon-magic" style="margin-right:6px"></span>AI 审核
             </el-button>
@@ -1282,6 +1328,7 @@
         // AI 预测对比
         aiPredicting: false,
         aiPrediction: null,
+        aiModel: '',           // AI 模型选择（空=自动容灾）
         // 报价历史
         quotes: [],
         showQuoteList: false,
@@ -1421,7 +1468,7 @@
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               items, params: { freight_mode: this.freightMode, ...this.params },
-              result: this.result,
+              result: this.result, model: this.aiModel,
             }),
           });
         } catch (e) { ElMessage.error('AI预测失败: ' + e.message); }
@@ -1601,6 +1648,7 @@
           <el-button @click="doAiPredict" :loading="aiPredicting" :disabled="!result">
             <span class="iconfont icon-graph-up" style="margin-right:6px"></span>AI预测对比
           </el-button>
+          <ModelSelect v-model="aiModel" />
           <el-button text @click="showQuoteList = !showQuoteList">
             {{ showQuoteList ? '收起' : '查看' }}报价历史（{{ quotes.length }}）
           </el-button>
@@ -1783,7 +1831,7 @@
       },
       cycleTheme,
     },
-    mounted() { this.loadMe(); this.loadSummary(); },
+    mounted() { this.loadMe(); this.loadSummary(); loadAiModels(); },
     template: `
     <el-container class="app-shell">
       <el-header class="topbar" height="52px">
@@ -1883,6 +1931,7 @@
   for (const [name, comp] of Object.entries(ElementPlusIconsVue)) {
     app.component(name, comp);
   }
+  app.component('ModelSelect', ModelSelect);   // 全局注册 AI 模型选择器
   app.use(ElementPlus);
   app.mount('#app');
 })();
