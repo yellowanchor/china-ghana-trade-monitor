@@ -819,7 +819,7 @@
         listings: [],            // 瓜子真实在售车源 [{title,reg_year,mileage,city,price,tag,url,img}]
         listingOk: false,
         listingMsg: '',          // 车源抓取说明（未识别品牌/限流提示等）
-        listingSource: '',       // 车源来源描述（如"瓜子二手车·重庆站·卡罗拉"）
+        listingSource: '',       // 车源来源描述（如"瓜子二手车·深圳站·卡罗拉"）
         history: [],            // [{id, ts, keyword, year, engine}]
         // 二手车利润计算器
         pc: {
@@ -926,7 +926,7 @@
           this.listings = d.listings || [];
           this.listingOk = this.listings.length > 0;
           this.listingMsg = this.listings.length ? '' : '该次搜索未抓到真实车源';
-          this.listingSource = this.listings.length ? '瓜子二手车·重庆站' : '';
+          this.listingSource = this.listings.length ? '瓜子二手车·深圳站' : '';
         } catch (e) { ElMessage.error('加载失败: ' + e.message); }
       },
     },
@@ -936,7 +936,7 @@
       <div class="section-head">
         <div class="kicker">Used Car Export Research</div>
         <h2>二手车行情</h2>
-        <div class="desc">输入「品牌+车型」关键词 + 年份：自动抓取瓜子二手车（重庆站）真实在售车源，大模型结合真实车源分析全版本指导价 / 二手价格区间 / 版本解读 / 出口加纳建议。</div>
+        <div class="desc">输入「品牌+车型」关键词 + 年份：自动抓取瓜子二手车（深圳站，沿海港口省国内运费）真实在售车源，大模型结合真实车源分析全版本指导价 / 二手价格区间 / 版本解读 / 出口加纳建议。</div>
       </div>
       <div class="panel">
         <div class="car-search-bar">

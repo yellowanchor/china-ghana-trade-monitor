@@ -1990,9 +1990,17 @@ def ask_ai(question, model=None):
 #   ③ 触发验证码（302 → uc.guazi.com/guazi-mall-ucenter/captcha）时快速失败，
 #     提示用户几分钟后再试，不无限重试加重封锁；
 #   ④ 品牌字典持久化缓存（car_brands 表），正常一次搜索只需 2 次请求。
+#
+# 多数据源调研结论（2026-08-31 实测，仅瓜子 SSR 直出可用，故保留瓜子为主源）：
+#   · 二手车之家 www.che168.com —— 重定向 captcha.aspx 验证码墙（EO_Bot_Ssid 反爬），不可用
+#   · 淘车 www.taoche.com —— DNS 无法解析（域名已停用），不可用
+#   · 懂车帝 www.dongchedi.com/usedcar —— Next.js 纯 JS 空壳（需 API，无公开搜索），不可用
+#   · 优信 www.xin.com —— 空壳 SPA（无 SSR 数据），不可用
+#   城市选深圳站 /sz/：沿海港口，二手海运出口可省国内陆运到港费用（原为重庆 /cq/）。
 
 GUAZI_BASE = "https://www.guazi.com"
-GUAZI_CITY = "cq"                      # 重庆站（业务所在地）
+GUAZI_CITY = "sz"                      # 深圳站（沿海港口，海运出口省国内陆运费）
+GUAZI_CITY_NAME = "深圳"               # 城市中文名（提示词/展示用）
 _GUAZI_MIN_INTERVAL = 6.0              # 相邻请求最小间隔（秒）
 _guazi_lock = threading.Lock()
 _guazi_last_req = [0.0]                # 上次请求时间戳（列表便于在函数内修改）
@@ -2121,7 +2129,7 @@ def _parse_guazi_cards(html):
 
 def fetch_used_cars(keyword, year=None, max_cards=40):
     """
-    抓取瓜子二手车（重庆站）真实在售车源。返回 dict：
+    抓取瓜子二手车（深圳站）真实在售车源。返回 dict：
       {ok, brand, series, series_url, count, listings: [...], msg}
     解析流程：关键词 → 品牌 slug（car_brands 缓存）→ 品牌页车系链接匹配车系
     → 车系页 SSR 车源卡片 → 按年份过滤（匹配不足 3 条时回退全量并说明）。
@@ -2192,7 +2200,7 @@ def fetch_used_cars(keyword, year=None, max_cards=40):
         listings.sort(key=lambda l: l["price"])
         listings = listings[:max_cards]
         if not listings:
-            result["msg"] = "瓜子重庆站暂无匹配「%s」的在售车源" % keyword
+            result["msg"] = "瓜子%s站暂无匹配「%s」的在售车源" % (GUAZI_CITY_NAME, keyword)
             return result
         result.update({"ok": True, "count": len(listings), "listings": listings,
                        "msg": year_note})
@@ -2202,7 +2210,7 @@ def fetch_used_cars(keyword, year=None, max_cards=40):
         return result
 
 
-def _listings_prompt(real, city_label="重庆"):
+def _listings_prompt(real, city_label="深圳"):
     """把真实车源整理为注入大模型的提示词片段（无车源时返回空串）。"""
     if not real.get("ok") or not real.get("listings"):
         return ""
@@ -2229,7 +2237,7 @@ def _listings_prompt(real, city_label="重庆"):
 
 def car_market_report(keyword, year, model=None):
     """
-    二手车大模型搜索：给定车型关键词 + 年份，先抓取瓜子二手车（重庆站）真实
+    二手车大模型搜索：给定车型关键词 + 年份，先抓取瓜子二手车（深圳站）真实
     在售车源，再让大模型结合真实数据分析输出：该年份下所有版本（配置款式）
     的当年新车指导价、当前二手价格区间、版本分析，以及面向加纳出口的适配
     态度与建议。结果与车源明细分别写入 car_queries / car_listings 表，
@@ -2266,8 +2274,15 @@ def car_market_report(keyword, year, model=None):
     conn.close()
     fx = ""
     if row:
-        fx = (f"\n最新汇率（{row['date']}）：USD/CNY = {row['usd_cny']:.4f}，"
-              f"USD/GHS = {row['usd_ghs']:.4f}。涉及价格折算时使用该汇率。\n")
+        usd_cny = float(row["usd_cny"])
+        usd_ghs = float(row["usd_ghs"])
+        ghs_cny = usd_cny / usd_ghs if usd_ghs else 0.0
+        fx = (
+            f"\n最新汇率（{row['date']}）：USD/CNY = {usd_cny:.4f}，USD/GHS = {usd_ghs:.4f}，"
+            f"GHS/CNY = {ghs_cny:.4f}（即 1 塞地 = {ghs_cny:.4f} 元，1 USD = {usd_ghs:.2f} 塞地）。\n"
+            f"换算速查：1 万人民币 ≈ {10000 / usd_cny:.0f} USD ≈ "
+            f"{10000 * usd_ghs / usd_cny:,.0f} GHS。\n"
+        )
 
     prompt = (
         f"请以中国二手车出口加纳业务顾问的身份，检索并分析车型：{keyword}（{year} 款）。\n"
@@ -2289,7 +2304,21 @@ def car_market_report(keyword, year, model=None):
         "## 四、出口加纳态度与建议\n"
         "- 逐版本给出出口适配评级（推荐/谨慎/不推荐）及理由：加纳为左舵国家、"
         "路况较差偏好耐用车型、当地热销品牌与保值情况、配件可获得性、排放/车龄限制等；\n"
-        "- 综合建议：折算加纳当地参考售价（GHS/USD）、利润空间与风险提示；\n"
+        "- 综合建议必须严格按下面【利润测算框架】逐步计算，逐条列出算式，禁止跳步、"
+        "禁止币种混淆。\n\n"
+        "【利润测算框架（人民币口径，务必逐步写出算式）】\n"
+        "① 到岸成本 CIF = 收购价 + 国内杂费 + 海运费\n"
+        "② 落地总成本 = CIF × (1 + 加纳综合税负率 35%)\n"
+        "③ 加纳售价折人民币 = 加纳终端售价(GHS) × GHS/CNY 汇率\n"
+        "④ 单台利润 = ③ − ②；利润率 = ④ ÷ ②\n\n"
+        "【汇率铁律（严禁币种混淆）】\n"
+        "- GHS 是加纳塞地、USD 是美元、CNY 是人民币，三者按上方汇率换算；\n"
+        "- 1 USD = 上方 USD/GHS 塞地，即 GHS 金额 ÷ USD/GHS = USD 金额；\n"
+        "- 严禁把 GHS 金额直接当作 USD 金额（如 GHS 3 万当成 USD 3 万，这是致命错误）。\n\n"
+        "【售价合理性约束】\n"
+        "- 加纳终端售价必须 ≥ 落地总成本，否则必然亏损；\n"
+        "- 售价 = 落地总成本 × (1 + 合理利润率)，同时参考加纳当地同类二手车市场价；\n"
+        "- 写出完整链条：收购价(CNY) → 折 USD → 加纳终端售价(GHS) → 单台利润(CNY/USD)。\n"
         "- 建议不得违背四条经营红线。\n"
         "\n注意：价格信息给出区间而非精确值；若某版本数据不确定，如实标注'数据待核'，"
         "不要编造。总长 900 字内。"
@@ -4043,7 +4072,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                                  "listings": real.get("listings", []),
                                  "listing_ok": bool(real.get("ok")),
                                  "listing_msg": real.get("msg", ""),
-                                 "listing_source": ("瓜子二手车·重庆站"
+                                 "listing_source": ("瓜子二手车·%s站" % GUAZI_CITY_NAME
                                                     + (f"·{real['series']}" if real.get("series") else f"·{real.get('brand') or ''}")
                                                     if real.get("ok") else "")})
             except ValueError as e:
