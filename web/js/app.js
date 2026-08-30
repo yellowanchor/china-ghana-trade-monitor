@@ -729,6 +729,102 @@
     </div>`,
   };
 
+  /* ---------- 二手车大模型搜索 ---------- */
+  const CarView = {
+    data() {
+      const now = new Date().getFullYear();
+      const years = [];
+      for (let y = now + 1; y >= 2005; y--) years.push(y);
+      return {
+        keyword: '',
+        year: now - 3,          // 默认 3 年车龄（二手出口主力）
+        years,
+        searching: false,
+        content: '',
+        engine: '',
+        ts: '',
+        history: [],            // [{id, ts, keyword, year, engine}]
+      };
+    },
+    methods: {
+      md2html,
+      async search() {
+        const kw = this.keyword.trim();
+        if (!kw) { ElMessage.warning('请输入车型关键词，如：丰田卡罗拉'); return; }
+        this.searching = true; this.content = '';
+        try {
+          const d = await api('/api/cars/search', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ keyword: kw, year: this.year }),
+          });
+          this.content = d.content; this.engine = d.engine; this.ts = d.ts;
+          ElMessage.success('分析完成');
+          this.loadHistory();
+        } catch (e) { ElMessage.error('搜索失败: ' + e.message); }
+        finally { this.searching = false; }
+      },
+      async loadHistory() {
+        try {
+          const d = await api('/api/cars/history');
+          this.history = d.items || [];
+        } catch (e) { /* 历史加载失败不阻塞 */ }
+      },
+      async openHistory(h) {
+        try {
+          const d = await api('/api/cars/' + h.id);
+          this.keyword = d.keyword; this.year = d.year;
+          this.content = d.content; this.engine = d.engine; this.ts = d.ts;
+        } catch (e) { ElMessage.error('加载失败: ' + e.message); }
+      },
+    },
+    mounted() { this.loadHistory(); },
+    template: `
+    <div class="content-inner">
+      <div class="section-head">
+        <div class="kicker">Used Car Export Research</div>
+        <h2>二手车行情</h2>
+        <div class="desc">输入车型关键词 + 年份，大模型检索该年款全版本新车指导价 / 二手价格区间 / 版本分析 / 出口加纳态度与建议。</div>
+      </div>
+      <div class="panel">
+        <div class="car-search-bar">
+          <el-input v-model="keyword" placeholder="车型关键词，如：丰田卡罗拉 / 本田思域 / 五菱宏光"
+                   clearable size="large" @keyup.enter="search"></el-input>
+          <el-select v-model="year" size="large" style="width:110px">
+            <el-option v-for="y in years" :key="y" :label="y + ' 款'" :value="y"></el-option>
+          </el-select>
+          <el-button type="primary" size="large" :loading="searching" @click="search">
+            <span class="iconfont icon-search" style="margin-right:6px"></span>大模型搜索
+          </el-button>
+        </div>
+        <div v-if="searching" class="car-loading">
+          <span class="iconfont icon-robot" style="font-size:20px;color:var(--accent)"></span>
+          大模型检索中，通常需要 30~90 秒，请勿关闭页面…
+        </div>
+        <div v-if="content && !searching">
+          <div class="car-meta">
+            <span class="iconfont icon-robot" style="color:var(--accent)"></span>
+            引擎: {{ engine }} ｜ 生成于 {{ ts }}
+            <span class="car-warn">（价格基于模型知识，仅供参考，成交前须实车核价）</span>
+          </div>
+          <div class="md" style="line-height:1.75" v-html="md2html(content)"></div>
+        </div>
+        <div v-else-if="!searching" style="color:var(--text-3);padding:24px 0;text-align:center">
+          输入车型关键词开始检索，历史搜索将自动保存
+        </div>
+      </div>
+      <div class="panel" v-if="history.length">
+        <h3 class="panel-title"><span class="iconfont icon-clock" style="color:var(--accent)"></span>历史搜索</h3>
+        <div class="car-history">
+          <div v-for="h in history" :key="h.id" class="car-history-item" @click="openHistory(h)">
+            <span class="car-history-kw">{{ h.keyword }}</span>
+            <span class="car-history-year">{{ h.year }} 款</span>
+            <span class="car-history-ts">{{ h.ts }}</span>
+          </div>
+        </div>
+      </div>
+    </div>`,
+  };
+
   /* ---------- 合同审核 ---------- */
   const ContractView = {
     data() {
@@ -1380,7 +1476,7 @@
      根组件：顶栏 + 侧栏 + 展示栏
      ============================================================ */
   const App = {
-    components: { OverviewView, RatesView, PoliciesView, PartsView, AiReportView, ContractView, CalculatorView },
+    components: { OverviewView, RatesView, PoliciesView, PartsView, AiReportView, CarView, ContractView, CalculatorView },
     data() {
       return {
         activeView: 'overview',
@@ -1527,6 +1623,7 @@
             <el-menu-item index="policies"><span class="iconfont icon-journal-text menu-ico"></span>政策监控</el-menu-item>
             <el-menu-item index="parts"><span class="iconfont icon-box-seam menu-ico"></span>配件报价</el-menu-item>
             <el-menu-item index="ai"><span class="iconfont icon-magic menu-ico"></span>AI 日报</el-menu-item>
+            <el-menu-item index="cars"><span class="iconfont icon-truck menu-ico"></span>二手车</el-menu-item>
             <el-menu-item index="contract"><span class="iconfont icon-file-earmark-text menu-ico"></span>合同审核</el-menu-item>
             <el-menu-item index="calculator"><span class="iconfont icon-cash-coin menu-ico"></span>利润测算</el-menu-item>
           </el-menu>
@@ -1541,6 +1638,7 @@
           <PoliciesView v-else-if="activeView === 'policies'" :policies="summary.policies" />
           <PartsView v-else-if="activeView === 'parts'" />
           <AiReportView v-else-if="activeView === 'ai'" :last-report="summary.last_report" :ai-enabled="summary.ai_enabled" />
+          <CarView v-else-if="activeView === 'cars'" />
           <ContractView v-else-if="activeView === 'contract'" />
           <CalculatorView v-else :defaults="summary.calc_defaults" :default-item="summary.calc_default_item" :categories="summary.categories" />
         </el-main>

@@ -611,6 +611,14 @@ def get_db():
             engine  TEXT,                           -- 模型名 或 "rule"（规则引擎）
             content TEXT                            -- 日报正文（Markdown）
         );
+        CREATE TABLE IF NOT EXISTS car_queries (     -- 二手车大模型搜索记录
+            id      INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts      TEXT,
+            keyword TEXT,                           -- 车型关键词（如"丰田卡罗拉"）
+            year    INTEGER,                        -- 年份（款型年，如 2019）
+            engine  TEXT,                           -- 实际使用的模型名
+            content TEXT                            -- 报告正文（Markdown）
+        );
         CREATE TABLE IF NOT EXISTS parts_quotes (   -- 配件批发报价（百度爱采购）
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
             keyword    TEXT,                        -- 搜索关键词
@@ -1819,6 +1827,66 @@ def ask_ai(question):
         {"role": "system", "content": BUSINESS_BRIEF},
         {"role": "user", "content": prompt},
     ])
+
+
+def car_market_report(keyword, year):
+    """
+    二手车大模型搜索：给定车型关键词 + 年份，让大模型输出该年份下所有版本
+    （配置款式）的当年新车指导价、当前二手价格区间、版本分析，以及面向
+    加纳出口的适配态度与建议。结果写入 car_queries 表并返回
+    (engine, content)。
+    上下文注入最新汇率（USD/CNY、USD/GHS），便于模型直接折算当地货币参考价。
+    """
+    keyword = (keyword or "").strip()
+    if not keyword:
+        raise ValueError("车型关键词不能为空")
+    try:
+        year = int(year)
+    except (TypeError, ValueError):
+        raise ValueError("年份无效")
+    if not (1990 <= year <= datetime.now().year + 1):
+        raise ValueError("年份超出合理范围（1990 ~ 明年）")
+    if not ai_enabled():
+        raise RuntimeError("尚未配置大模型 API Key，无法使用二手车搜索（请在 ai_config.json 配置）")
+
+    conn = get_db()
+    row = conn.execute("SELECT date, usd_cny, usd_ghs FROM rates ORDER BY date DESC LIMIT 1").fetchone()
+    conn.close()
+    fx = ""
+    if row:
+        fx = (f"\n最新汇率（{row['date']}）：USD/CNY = {row['usd_cny']:.4f}，"
+              f"USD/GHS = {row['usd_ghs']:.4f}。涉及价格折算时使用该汇率。\n")
+
+    prompt = (
+        f"请以中国二手车出口加纳业务顾问的身份，检索并分析车型：{keyword}（{year} 款）。\n"
+        f"{fx}"
+        "\n必须输出以下内容（Markdown 格式）：\n"
+        f"## 一、{year} 款 {keyword} 全版本价格表\n"
+        "列出该年份在中国市场销售的所有版本/配置款式（燃油/混动/两厢三厢等均含）的"
+        "当年新车官方指导价（万元），用表格呈现：版本名称｜变速箱｜当年新车指导价｜"
+        "当前二手价格区间（万元，按车况分档）。\n"
+        "## 二、各版本分析\n"
+        "逐版本点评：动力总成、配置亮点、二手市场流通性/保值率、适合的买家画像。\n"
+        "## 三、出口加纳态度与建议\n"
+        "- 逐版本给出出口适配评级（推荐/谨慎/不推荐）及理由：加纳为左舵国家、"
+        "路况较差偏好耐用车型、当地热销品牌与保值情况、配件可获得性、排放/车龄限制等；\n"
+        "- 综合建议：适合收购的车况/里程区间、目标收购价（人民币）、"
+        "折算加纳当地参考售价（GHS/USD）、利润空间与风险提示；\n"
+        "- 建议不得违背四条经营红线。\n"
+        "\n注意：价格信息基于你的训练知识，给出区间而非精确值；"
+        "若某版本数据不确定，如实标注'数据待核'，不要编造。总长 800 字内。"
+    )
+    content = ai_chat([
+        {"role": "system", "content": BUSINESS_BRIEF},
+        {"role": "user", "content": prompt},
+    ])
+    engine = AI_LAST_ENGINE or load_ai_config()["model"]
+    conn = get_db()
+    conn.execute("INSERT INTO car_queries(ts, keyword, year, engine, content) VALUES(?,?,?,?,?)",
+                 (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                  keyword, year, engine, content))
+    conn.commit(); conn.close()
+    return engine, content
 
 
 # ==============================================================================
@@ -3387,6 +3455,28 @@ class DashboardHandler(BaseHTTPRequestHandler):
             stats = [dict(r) for r in conn.execute(stats_sql, params)]
             conn.close()
             self._send(200, {"quotes": quotes, "stats": stats, "confirmed": confirmed})
+        elif path == "/api/cars/history":
+            # 二手车搜索历史（不含正文，点击后再取详情）
+            conn = get_db()
+            rows = conn.execute(
+                "SELECT id, ts, keyword, year, engine FROM car_queries "
+                "ORDER BY id DESC LIMIT 50").fetchall()
+            conn.close()
+            self._send(200, {"items": [dict(r) for r in rows]})
+        elif path.startswith("/api/cars/"):
+            # 加载单条二手车报告详情 /api/cars/{id}
+            try:
+                cid = int(path.split("/api/cars/")[1].split("/")[0])
+            except ValueError:
+                return self._send(400, {"error": "无效的报告 id"})
+            conn = get_db()
+            row = conn.execute(
+                "SELECT id, ts, keyword, year, engine, content FROM car_queries "
+                "WHERE id=?", (cid,)).fetchone()
+            conn.close()
+            if not row:
+                return self._send(404, {"error": "报告不存在"})
+            self._send(200, dict(row))
         else:
             # 其余路径按静态资源处理：/css/* /js/* /vendor/* 等（web/ 目录）
             self._serve_static(path)
@@ -3431,6 +3521,21 @@ class DashboardHandler(BaseHTTPRequestHandler):
             body = self._read_json()
             answer = ask_ai(body.get("question", ""))
             self._send(200, {"answer": answer})
+        elif self.path == "/api/cars/search":
+            # 二手车大模型搜索：请求体 {"keyword": "丰田卡罗拉", "year": 2019}
+            # 大模型调用耗时较久（可能 30~90 秒）
+            body = self._read_json()
+            try:
+                engine, content = car_market_report(
+                    body.get("keyword"), body.get("year"))
+                self._send(200, {"ok": True, "engine": engine, "content": content,
+                                 "keyword": (body.get("keyword") or "").strip(),
+                                 "year": body.get("year"),
+                                 "ts": datetime.now().strftime("%Y-%m-%d %H:%M")})
+            except ValueError as e:
+                self._send(400, {"error": str(e)})
+            except Exception as e:
+                self._send(502, {"error": "大模型调用失败：%s" % str(e)[:120]})
         elif self.path == "/api/goods":
             # 保存商品到 goods 表：请求体 {name, sku, category, unit_price, ...}
             body = self._read_json()
